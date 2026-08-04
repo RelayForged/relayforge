@@ -2,7 +2,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from typing import Dict, Any
 import uuid
 from datetime import datetime, timezone
-from platform.kernel.value_objects.identifiers import CorrelationID, CausationID
+from relay.kernel.value_objects.identifiers import CorrelationID, CausationID
 
 class Event(BaseModel):
     """
