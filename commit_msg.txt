@@ -1,0 +1,24 @@
+Initial commit: Project scaffold, domain models, and core infrastructure
+
+This commit establishes the foundational layer for the Relay Event Delivery Platform as part of the Sprint 1 kickoff. It focuses on strict domain boundaries, immutable data structures, and the baseline infrastructure required to construct the Dispatcher and Worker components.
+
+Key additions:
+1. Repository Scaffolding:
+   - Created the complete directory tree outlined in the architecture spec (platform/, docs/, benchmark/).
+   - Initialized empty directories with .gitkeep to enforce the structural boundaries between the Control Plane, Data Plane, and Adapters.
+
+2. Core Domain Entities & Value Objects:
+   - Defined Event, Endpoint, Subscription, Delivery, and DeliveryAttempt in platform/kernel/entities/.
+   - All entities are modeled as strict, immutable Pydantic models (frozen=True) to adhere to the principle of immutable event records.
+   - Introduced CorrelationID and CausationID value objects in platform/kernel/value_objects/identifiers.py to enable deterministic delivery timeline reconstruction.
+
+3. Infrastructure & Orchestration:
+   - Added docker-compose.yml to spin up Kafka (KRaft mode, no ZooKeeper), PostgreSQL, and Redis.
+   - Configured necessary health checks and local port mappings for developer environments.
+
+4. Architecture & Documentation:
+   - Created ADR 0009 (docs/adr/0009-eri-windowing.md) capturing the decision to use an attempt-count-only window for Endpoint Reliability Index (ERI) calculations, rejecting time-based filters for greater stability.
+   - Authored the sprint kickoff summary (docs/setup_summary.md) to align the team on exact entity shapes, Kafka topics, and infrastructure requirements before independent work begins.
+   - Included a comprehensive .gitignore targeting Python cache, IDE configs, virtual environments, and personal agent instructions.
+
+This commit satisfies all Pre-Week 1 and Week 1 Day 1 criteria and unblocks the execution of downstream event ingestion and webhook delivery tasks.
