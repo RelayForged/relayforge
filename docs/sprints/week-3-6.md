@@ -11,10 +11,14 @@
 
 ---
 
-## B (Sam) — Weeks 3–4: AEDE Core (Independent)
+## B (Sam) — Weeks 3–4: AEDE Core (COMPLETED ✅)
 
-> [!TIP]
-> Since ERI and State Machine are done 2 weeks early, you can build the entire AEDE core now. Everything below has **zero dependency** on A or C.
+> [!NOTE]
+> **Status**: 100% Complete — 48/48 unit & integration tests passing.
+> **Associated Architecture Decision Records**:
+> - [ADR 0011: Three-Tier Delivery Policy Fallback Hierarchy](file:///c:/Users/sammj/MajorProject/docs/adr/0011-three-tier-policy-fallback.md)
+> - [ADR 0012: Endpoint State Machine Quarantine Terminality](file:///c:/Users/sammj/MajorProject/docs/adr/0012-quarantine-state-terminality.md)
+> - [ADR 0013: Explainability Record Schema and Metric Preservation](file:///c:/Users/sammj/MajorProject/docs/adr/0013-explainability-record-schema.md)
 
 ### Task 1: `DeliveryPolicy` Entity
 **File**: `relay/kernel/policies/delivery_policy.py`
