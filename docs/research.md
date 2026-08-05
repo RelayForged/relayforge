@@ -55,15 +55,17 @@ Prior work generally falls into five categories:
 
 ### The Compound Gap
 
-Each individual problem domain has received significant attention. What remains largely unexplored is the **integration of these concepts into a unified runtime decision framework specifically designed for outbound event delivery**.
+Each individual problem domain has received significant attention. What remains largely unexplored in the **published literature** is the integration of these concepts into a unified runtime decision framework specifically designed for outbound event delivery — and the experimental validation of such a framework against conventional approaches.
 
-To the best of our knowledge, no prior work simultaneously:
+Commercial webhook platforms (Svix, Hookdeck, etc.) likely implement some form of adaptive delivery internally, but their implementations are proprietary. No published account of their internal decision architecture, policy models, or comparative evaluations exists. The gap addressed by this work is therefore a **research literature gap**, not a claim that no such system has ever been built.
 
-- continuously evaluates endpoint state using externally observable behavior only,
-- derives runtime delivery policies directly from that state,
-- coordinates retry scheduling, endpoint isolation, replay decisions, and operational alerts through a common policy engine,
-- exposes these decisions transparently through developer-facing observability,
-- and provides a reproducible platform for evaluating those policies under controlled failure scenarios.
+To the best of our knowledge, no prior published work:
+
+- presents a unified policy framework that derives delivery behavior from continuously evaluated endpoint state using only externally observable signals,
+- experimentally compares that framework against static and adaptive baselines under controlled failure conditions,
+- and publishes the complete implementation — including infrastructure, configuration, and benchmark tooling — for independent verification and extension.
+
+The framework coordinates retry scheduling, endpoint isolation, replay decisions, and operational alerts through a common policy engine, and exposes every automated decision transparently through developer-facing observability. These capabilities are described in detail in the System Design sections; the research contribution is their integration, experimental evaluation, and open publication.
 
 ### Why Existing Adaptive Systems Cannot Be Directly Applied
 
@@ -160,13 +162,19 @@ Multiple runs per experiment. Reported metrics include mean, median, standard de
 
 ### Threats to Validity
 
-**Internal validity**: Policy thresholds influence results. Experiments evaluate multiple threshold configurations.
+**Internal validity — threshold and weight sensitivity**: AEDE's policy decisions depend on configured ERI weights and state machine thresholds. Different configurations may produce different relative performance between strategies. *Mitigation*: all weights and thresholds are disclosed and held constant across strategy comparisons. A secondary weight sensitivity analysis (3–4 alternative configurations) is planned to demonstrate that the framework's advantage holds across reasonable weight variations, even if absolute performance differs.
 
-**External validity**: Benchmark environment may not perfectly represent production workloads. Failure scenarios model realistic industrial conditions where possible.
+**Internal validity — single-endpoint evaluation**: MVP experiments evaluate AEDE against a single endpoint. Production systems deliver to many concurrent endpoints, where worker contention, shared queue depth, and cross-endpoint policy interactions may affect results. *Acknowledgment*: multi-endpoint evaluation is noted as future work. The single-endpoint design isolates the policy engine's behavior from scheduling effects, which is appropriate for validating the framework's core mechanism.
 
-**Construct validity**: Metrics directly measure delivery performance rather than implementation artifacts.
+**External validity — synthetic failure patterns**: The Endpoint Simulator produces controlled, parameterized failures. Real-world endpoints exhibit correlated failures, ambiguous partial responses (e.g., HTTP 200 with error body), deployment-window behavior, and rate-limit patterns that may not match the simulator's modes. *Mitigation*: the simulator's four failure modes (http_error, timeout, slow, rate_limit) cover the most common failure signatures observed in production webhook systems. The ten evaluation scenarios are designed to be representative, not exhaustive.
 
-**Reproducibility**: All configurations, datasets, policies, and infrastructure published alongside source code to enable independent verification.
+**External validity — controlled event volume**: Experiments use a fixed event publication rate. Production systems experience bursty, non-uniform event volumes that interact with queue depth and ERI computation. *Acknowledgment*: variable-rate event publication is a future evaluation dimension.
+
+**Construct validity — ERI as a proxy for endpoint health**: The ERI is a weighted composite of observable metrics, not a direct measurement of endpoint availability. The composite score may mask important signals (e.g., a high success rate hiding increasing latency) or overweight unimportant ones. *Mitigation*: the ERI sub-scores are preserved in every ExplainabilityRecord, allowing post-hoc analysis of whether the composite score accurately reflected the endpoint's actual condition during each experiment.
+
+**Construct validity — window size sensitivity**: The attempt-count-based ERI window (default: 100 attempts) produces different responsiveness characteristics for high-volume vs low-volume endpoints. A window of 100 attempts represents seconds of history for a high-throughput endpoint but hours for a low-volume one. *Mitigation*: benchmark experiments use controlled, uniform event publication rates, eliminating this asymmetry during evaluation. The tradeoff is acknowledged as a limitation for production deployment (see ADR 0009).
+
+**Reproducibility**: All configurations, event datasets, policy parameters, simulator settings, and infrastructure definitions are published alongside the source code. Experiments use attempt-count-based ERI windows with explicit timestamp parameters (no wall-clock dependency inside AEDE), ensuring identical replay across runs.
 
 ---
 

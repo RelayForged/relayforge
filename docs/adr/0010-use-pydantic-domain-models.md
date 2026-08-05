@@ -42,12 +42,12 @@ Domain models in this platform must fulfill five core architectural requirements
 
 ## Decision
 
-Use **Pydantic v2** frozen models (`BaseModel` with `model_config = ConfigDict(frozen=True)`) as the single source of truth for all domain entities, value objects, delivery policies, and operational events across the Relay platform (`platform/kernel/domain/`, `entities/`, `value_objects/`, `policies/`).
+Use **Pydantic v2** frozen models (`BaseModel` with `model_config = ConfigDict(frozen=True)`) as the single source of truth for all domain entities, value objects, delivery policies, and operational events across the Relay platform (`relay/kernel/domain/`, `entities/`, `value_objects/`, `policies/`).
 
 ### Implementation Rules:
 1. **Mandatory Frozen Configuration**: All domain entities and value objects must specify `model_config = ConfigDict(frozen=True)` or inherit from a base immutable model.
 2. **Boundary Validation**: Serialization to and from Kafka topics, Redis caches, and PostgreSQL repositories must use Pydantic's native `.model_dump()`, `.model_dump_json()`, and `.model_validate_json()`.
-3. **SDK Schema Sharing**: The Python SDK must import domain models directly from `platform.kernel.entities`, maintaining complete alignment between client payloads and server schemas.
+3. **SDK Schema Sharing**: The Python SDK must import domain models directly from `relay.kernel.entities`, maintaining complete alignment between client payloads and server schemas.
 4. **Value Objects**: Use custom frozen Pydantic types or value object wrappers (e.g. `CorrelationID`, `CausationID`, `EndpointID`) to enforce domain invariant rules at creation time.
 
 ## Consequences
@@ -55,7 +55,7 @@ Use **Pydantic v2** frozen models (`BaseModel` with `model_config = ConfigDict(f
 ### Positive
 - **Guarantees Core Architectural Law**: Neither Workers nor AEDE can mutate entity state in memory after creation.
 - **Ensures AEDE Determinism**: Pure, hashable, frozen models enable side-effect-free policy calculation.
-- **Eliminates Schema Drift**: A field change in `platform/kernel/entities/` automatically updates FastAPI OpenAPI documentation, SDK type hints, and database mapper validation.
+- **Eliminates Schema Drift**: A field change in `relay/kernel/entities/` automatically updates FastAPI OpenAPI documentation, SDK type hints, and database mapper validation.
 - **High-Speed Serialization**: Leveraging Pydantic v2's Rust backend ensures low serialization latency for Kafka messaging and Redis cache operations.
 - **Static & Runtime Type Safety**: Enables static analysis tools (`mypy`, `pyright`) while protecting runtime execution against malformed payloads.
 

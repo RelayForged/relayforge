@@ -87,21 +87,17 @@ The **Endpoint Simulator** and the **Live Dashboard** are not optional extras. T
 
     Dispatcher → Workers → Delivery Adapters
     Retry Manager
-    Replay Manager
-    Notification Service
+    Replay Manager (deferred)
+    Notification Service (deferred)
+    Webhook Adapter (v1)
 
                ─────────────────────
 
-              Layer 5: Delivery Adapters
+              Layer 5: Infrastructure
 
-                Webhook Adapter (v1)
-
-               ─────────────────────
-
-              Layer 6: Infrastructure
-
-    PostgreSQL  •  Redis  •  Prometheus  •  Grafana
-    Docker  •  Kubernetes  •  Terraform
+    PostgreSQL  •  Redis  •  Docker
+    Prometheus (deferred)  •  Grafana (deferred)
+    Kubernetes (deferred)  •  Terraform (deferred)
 ```
 
 ---
@@ -457,7 +453,7 @@ A Subscription does NOT own: retry logic, endpoint health, delivery policies, en
 ### Subscription Lifecycle
 
 ```
-CREATED → ACTIVE → PAUSED → DISABLED → ARCHIVED
+CREATED → ACTIVE → PAUSED → DISABLED (post-MVP) → ARCHIVED (post-MVP)
 ```
 
 Subscriptions are versioned. Historical deliveries always reference the subscription version that created them.
