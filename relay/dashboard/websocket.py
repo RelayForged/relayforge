@@ -1,39 +1,43 @@
-from datetime import datetime, timedelta, timezone
+import asyncio
+import random
+from datetime import datetime, timezone
 
-from fastapi import WebSocket
+from fastapi import WebSocket, WebSocketDisconnect
 
-from .models import StateUpdate
+from .models import ERIPoint, StateUpdate
 
 
 async def send_state_update(websocket: WebSocket) -> None:
-    now = datetime.now(timezone.utc)
+    eri = 100
 
-    message: StateUpdate = {
-        "type": "state_update",
-        "state": "AVAILABLE",
-        "eri": 100,
-        "eri_history": [
-            {
-                "timestamp": (now - timedelta(minutes=4)).isoformat(),
-                "value": 100,
-            },
-            {
-                "timestamp": (now - timedelta(minutes=3)).isoformat(),
-                "value": 99,
-            },
-            {
-                "timestamp": (now - timedelta(minutes=2)).isoformat(),
-                "value": 100,
-            },
-            {
-                "timestamp": (now - timedelta(minutes=1)).isoformat(),
-                "value": 98,
-            },
-            {
-                "timestamp": now.isoformat(),
-                "value": 100,
-            },
-        ],
-    }
+    history: list[ERIPoint] = []
 
-    await websocket.send_json(message)
+    try:
+        while True:
+            change = random.choice([-2, -1, 0, 0, 0, 1, 2])
+            eri = max(0, min(100, eri + change))
+
+            now = datetime.now(timezone.utc)
+
+            history.append(
+                {
+                    "timestamp": now.isoformat(),
+                    "value": eri,
+                }
+            )
+
+            history = history[-30:]
+
+            message: StateUpdate = {
+                "type": "state_update",
+                "state": "AVAILABLE",
+                "eri": eri,
+                "eri_history": history,
+            }
+
+            await websocket.send_json(message)
+
+            await asyncio.sleep(2)
+
+    except WebSocketDisconnect:
+        pass

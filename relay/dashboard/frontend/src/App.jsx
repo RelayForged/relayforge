@@ -9,6 +9,11 @@ import {
   ResponsiveContainer,
 } from 'recharts'
 import './App.css'
+import {
+  demoDeliveryEvents,
+  demoPolicyDecision,
+  demoPolicyExplanation,
+} from './demoData'
 
 function App() {
   const [state, setState] = useState('Connecting...')
@@ -91,7 +96,57 @@ function App() {
     </ResponsiveContainer>
   </div>
 </section>
+
+<section>
+  <h2>Delivery Timeline</h2>
+
+  <div className="timeline">
+    {demoDeliveryEvents.map((event) => (
+      <div className="timeline-event" key={event.id}>
+        <span className="timeline-time">{event.timestamp}</span>
+        <span className="timeline-type">{event.type}</span>
+      </div>
+    ))}
+  </div>
+</section>
+
+<section>
+  <h2>Policy Decision</h2>
+
+  <div className="policy-decision">
+    <div>
+      <strong>Decision:</strong>
+      <span>{demoPolicyDecision.decision}</span>
+    </div>
+
+    <div>
+      <strong>Selected target:</strong>
+      <span>{demoPolicyDecision.selectedTarget}</span>
+    </div>
+
+    <div>
+      <strong>Reason:</strong>
+      <span>{demoPolicyDecision.reason}</span>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Explainability</h2>
+
+  <div className="explainability">
+    <h3>{demoPolicyExplanation.title}</h3>
+
+    <ul>
+      {demoPolicyExplanation.reasons.map((reason) => (
+        <li key={reason}>{reason}</li>
+      ))}
+    </ul>
+  </div>
+</section>
     </main>
+
+
   )
 }
 
