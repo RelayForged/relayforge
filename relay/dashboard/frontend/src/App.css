@@ -182,3 +182,42 @@
     border-right-color: var(--border);
   }
 }
+
+.status-badge {
+  display: inline-block;
+  padding: 0.5rem 1rem;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 1rem;
+  letter-spacing: 0.03em;
+}
+
+.status-available {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.status-degraded {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.status-unstable {
+  background: #ffedd5;
+  color: #9a3412;
+}
+
+.status-quarantined {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.status-recovering {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.chart-container {
+  width: 600px;
+  max-width: 90vw;
+}
