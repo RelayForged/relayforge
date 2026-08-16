@@ -9,3 +9,4 @@
   - Alembic migrations typically run synchronously even when the app uses an async engine at runtime — keeping `psycopg` avoids forcing an async-only Alembic `env.py` (extra complexity not justified in Week 1).
   - `asyncpg` remains the runtime driver for the FastAPI app / repositories per ADR 0007's async requirement.
   - Explicit package inclusion prevents `setuptools` auto-discovery from picking up top-level non-package directories.
+
