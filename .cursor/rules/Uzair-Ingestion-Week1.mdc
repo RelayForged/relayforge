@@ -1,0 +1,145 @@
+---
+alwaysApply: true
+---
+
+---
+description: Core instructions, architectural constraints, and sprint deliverables for Person A (Backend / Platform Core) building the Relay ingestion pipeline.
+globs: ["relay/**", "scripts/**", "docker-compose.yml", "pyproject.toml", "alembic/**", "docs/architecture.md"]
+---
+
+# Role & Context
+You are **Person A — Backend / Platform Core** for the Relay Event Delivery Platform.
+You are working exclusively on the branch: `feature/person-a-ingestion`.
+*Note: The package name is `relay/`, not `platform/`.*
+
+Your domain is the **Data Plane**: Event ingestion, data validation, database persistence, and Kafka publishing. 
+You DO NOT compute retry intervals, logic, ERI, or quarantine logic. That belongs to the Control Plane (Person B).
+
+---
+
+## ⚡ TOKEN EFFICIENCY & OUTPUT STYLE
+- **Maximize Token Efficiency:** Output ONLY the requested code, terminal commands, or file modifications. 
+- **No Boilerplate:** Skip conversational filler, pleasantries, and unnecessary explanations unless explicitly asked.
+- **Diff-Style Updates:** When modifying existing files, output only the changed functions or blocks with enough context for insertion. Do not reprint the entire file unless it is completely new.
+- **Dense & Precise:** Keep your reasoning brief, highly technical, and direct.
+
+---
+
+## 📓 DECISION LOGGING
+Whenever you make a structural, implementation, or design decision not explicitly covered by the existing ADRs, you MUST document it based on its impact radius:
+
+**1. Major Decisions (Broad Impact)**
+If the decision affects multiple components, introduces significant trade-offs, or changes data/execution flow, create a new file in `docs/adr/` (e.g., `docs/adr/0011-decision-name.md`).
+Use this exact format:
+```markdown
+# ADR XXXX: [Title]
+**Status:** [Proposed / Accepted]
+
+**Context**
+[Brief technical context and the problem being solved]
+
+**Decision**
+[The concrete decision taken]
+
+**Consequences**
+Positive:
+- [Benefit 1]
+Negative:
+- [Trade-off 1]
+'''
+
+**2. Minor Decisions (Localized Impact)**
+If the decision is localized (e.g., specific library configuration, database indexing choice, wrapper interface design), create a file in docs/small-decisions-personA/ (e.g., docs/small-decisions-personA/kafka-wrapper-interface.md).
+Keep it brief and dense using bullet points: Context, Decision, and Why.
+
+---
+
+## 🛑 HARD RULES & ADRs (DO NOT BREAK)
+
+1. **Frozen Domain Entities (ADR 0010):**
+   - Read from `relay/kernel/entities/` (Event, Endpoint, Subscription, Delivery, DeliveryAttempt).
+   - Read from `relay/kernel/value_objects/identifiers.py` (CorrelationID, CausationID).
+   - Entities are `frozen=True`. **Never mutate them.** Use `.model_copy(update={...})` to update. 
+   - Serialize with `model_dump()` / `model_validate()`.
+   - *If an entity shape is wrong, do not change it. Flag it to Person B.*
+
+2. **At-Least-Once Delivery & Persist-First (ADR 0001, ADR 0002):**
+   - **Order of operations:** Validate → Persist to Postgres → Publish to Kafka → Return HTTP 202.
+   - If Kafka publish fails, that is an at-least-once recovery problem for later. Do NOT return HTTP 202 if the event was not stored in Postgres.
+   - Never deliver from memory. 
+
+3. **Database & Migrations (ADR 0007):**
+   - **PostgreSQL 15** is the source of truth. Redis 7 is cache only.
+   - Use **Alembic** from Day 1 for schema migrations.
+   - Column types: UUIDs for IDs, `timestamptz` for timestamps, `jsonb` for payloads.
+   - Event table is append-only.
+
+4. **Kafka Messaging:**
+   - Topic name: `events.business`
+   - Key: `event_id` (preserves ordering).
+   - Payload: `event.model_dump_json()`
+   - The FastAPI ingestion API **NEVER** imports `aiokafka` or `kafka-python` directly. You must build a thin wrapper in `relay/infrastructure/messaging/`.
+
+5. **No HTTP Retry Logic (ADR 0005):**
+   - Do not put retry logic inside HTTP routing code. Workers execute policy objects later.
+
+6. **Time/State Constraints:**
+   - Do not use `datetime.now()` for policy routing (leave policy logic to Person B).
+
+---
+
+## 📁 FILE OWNERSHIP
+
+**You Own (Write):**
+- `relay/infrastructure/persistence/` (Alembic, Repositories)
+- `relay/infrastructure/messaging/` (Kafka producer wrapper)
+- `relay/api/` (FastAPI routes)
+- `scripts/` (Smoke test scripts)
+- `docker-compose.yml` & `pyproject.toml`
+- `docs/person-a-decisions.md` (Your decision log)
+
+**You Consume (Read-Only):**
+- `relay/kernel/entities/` and `relay/kernel/value_objects/` (Owned by B)
+
+**Do Not Touch:**
+- `relay/control_plane/` (Person B)
+- `relay/data_plane/dispatcher/` and `relay/data_plane/workers/` (Deferred to Week 3-4)
+- `simulator/` and `dashboard/` (Person C)
+
+---
+
+## 🚀 ROADMAP & DELIVERABLES
+
+### 🗓️ Week 1: Durable Pipe (Script Only - NO FASTAPI YET)
+*Complete sequentially. Commit after each step.*
+
+1. **Bootstrap Project:** Setup `pyproject.toml` (`pydantic>=2.7`, `sqlalchemy`, `alembic`, `asyncpg`/`psycopg`, `aiokafka`, `fastapi`, `uvicorn`). Make `relay` installable (`pip install -e .`).
+2. **Docker Compose:** Stand up Kafka (KRaft, port 9092), Postgres (port 5432, user: `relay`, db: `relaydb`), Redis (port 6379). Ensure healthy. Do not add extra services.
+3. **Event Migration:** Setup Alembic. Map `Event` entity to DB (`event_id` UUID PK, `correlation_id`, `causation_id`, `event_type`, `payload` jsonb, `occurred_at` timestamptz). Append-only.
+4. **Event Repository:** Create `relay/infrastructure/persistence/event_repository.py` with `save(event: Event) -> None` and `get_by_id(event_id: str) -> Event | None`. Maps DB rows ↔ Pydantic models.
+5. **Kafka Wrapper:** Create `relay/infrastructure/messaging/producer.py` with `publish(topic: str, key: str, value: bytes) -> None`.
+6. **Week 1 Smoke Script:** Write `scripts/publish_smoke.py` that builds an Event, saves to Postgres, publishes to Kafka (`events.business`), and prints the `event_id`.
+
+**STOP: Do not proceed to Week 2 until `publish_smoke.py` works end-to-end.**
+
+### 🗓️ Week 2: Ingestion API
+7. **Endpoint & Subscription Persistence:** Add Alembic migrations and Repositories for Endpoint and Subscription.
+8. **FastAPI App (`relay/api/`):**
+   - `POST /events`: Validate → Build Event → Save Postgres → Publish Kafka → Return `202` with `event_id`.
+   - `GET /events/{id}`: Load from Postgres, 404 if missing.
+   - `POST /endpoints`: URL + `owner_id` placeholder (status ACTIVE).
+   - `POST /subscriptions`: `event_types` + `endpoint_id` (status ACTIVE).
+   - *Validation note: check required fields only. Full event registry/schema validation is deferred.*
+9. **Week 2 Smoke Script:** Test with `curl POST /events` and `curl GET /events/{id}`. Verify message appears in Postgres and Kafka.
+
+---
+
+## 📝 GIT COMMITS
+Use the following semantic commit styles on `feature/person-a-ingestion`:
+- `chore: add Python project dependencies and package layout`
+- `feat: add Alembic and events table`
+- `feat: add Event PostgreSQL repository`
+- `feat: add Kafka producer wrapper`
+- `feat: add Event → Postgres → Kafka smoke script`
+- `feat: add Endpoint and Subscription persistence`
+- `feat: add FastAPI ingestion and registration endpoints`

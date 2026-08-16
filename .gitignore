@@ -166,3 +166,7 @@ Thumbs.db
 CLAUDE.md
 .agents/
 .gemini/
+
+#Cursor Configuration
+.cursor/
+*.mdc
