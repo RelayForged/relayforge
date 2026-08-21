@@ -1,8 +1,9 @@
-# Data Plane — Week 1 Sequence Diagrams
+# Data Plane — Sequence Diagrams
 
-Runtime behavior for Week 1 Steps 2–6, reflecting the actual implementation
-(not the plan). See `docs/data-plane-class-diagram.md` for the static
-structure these sequences operate on.
+Runtime behavior for Week 1 Steps 2–6 and Week 2 registration routes,
+reflecting the actual implementation (not the plan). See
+`docs/data-plane-class-diagram.md` for the static structure these sequences
+operate on.
 
 ---
 
@@ -183,3 +184,47 @@ sequenceDiagram
 **Verified live** (see commit `4bb5cee`): the row in Postgres and the message
 on `events.business` were independently confirmed to contain matching data
 for the same `event_id`.
+
+---
+
+## 7. Register Endpoint then Subscription (Week 2)
+
+`POST /endpoints` then `POST /subscriptions`. Kafka is not on this path —
+these are configuration writes only. The subscription route looks up the
+endpoint before insert so a missing `endpoint_id` returns 404 instead of a
+raw FK error.
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant App as FastAPI (relay.api)
+    participant EPRepo as EndpointRepository
+    participant SubRepo as SubscriptionRepository
+    participant PG as Postgres
+
+    User->>App: POST /endpoints<br/>{target_url, owner_id}
+    App->>App: Endpoint(target_url, owner_id)<br/>is_active=True
+    App->>EPRepo: await save(endpoint)
+    EPRepo->>PG: UPSERT endpoints (ON CONFLICT DO UPDATE)
+    PG-->>EPRepo: row persisted
+    EPRepo-->>App: None
+    App-->>User: 201 Endpoint
+
+    User->>App: POST /subscriptions<br/>{endpoint_id, event_types}
+    App->>EPRepo: await get_by_id(endpoint_id)
+    EPRepo->>PG: SELECT * FROM endpoints WHERE endpoint_id = :id
+    alt endpoint exists
+        PG-->>EPRepo: row
+        EPRepo-->>App: Endpoint
+        App->>App: Subscription(endpoint_id, event_types,<br/>status="ACTIVE")
+        App->>SubRepo: await save(subscription)
+        SubRepo->>PG: UPSERT subscriptions<br/>(FK endpoint_id → endpoints)
+        PG-->>SubRepo: row persisted
+        SubRepo-->>App: None
+        App-->>User: 201 Subscription
+    else endpoint missing
+        PG-->>EPRepo: empty
+        EPRepo-->>App: None
+        App-->>User: 404 Endpoint not found
+    end
+```
