@@ -11,10 +11,12 @@
 
 ---
 
-## B (Sam) — Weeks 3–4: AEDE Core (COMPLETED ✅)
+## B (Sam) — Weeks 3–6: AEDE Core & Next Steps
+
+### Completed Work (Weeks 3-6)
 
 > [!NOTE]
-> **Status**: 100% Complete — 48/48 unit & integration tests passing.
+> **Status**: AEDE Core and Infrastructure Foundations are 100% Complete — 48/48 unit & integration tests passing.
 > **Associated Architecture Decision Records**:
 > - [ADR 0011: Three-Tier Delivery Policy Fallback Hierarchy](file:///c:/Users/sammj/MajorProject/docs/adr/0011-three-tier-policy-fallback.md)
 > - [ADR 0012: Endpoint State Machine Quarantine Terminality](file:///c:/Users/sammj/MajorProject/docs/adr/0012-quarantine-state-terminality.md)
@@ -127,18 +129,22 @@ Cover:
 
 ---
 
-### B Week 3–4 Estimated Timeline
+### What B Can Do Next (Acceleration & Integration)
 
-| Day | Tasks |
-|---|---|
-| 1 | `DeliveryPolicy` entity + sub-policy models |
-| 2 | `PolicyEvaluation` + `ExplainabilityRecord` entities |
-| 3–4 | Policy Synthesizer (state → policy mapping + explainability generation) |
-| 5 | Strategy A + Strategy B definitions |
-| 6 | `DeliveryStrategy` interface + Feature Flag system |
-| 7 | Redis policy cache interface + implementation |
-| 8 | ExplainabilityRecord repository + Alembic migration |
-| 9–10 | Full unit test suite for everything above |
+Since B has completed the AEDE core, strategies, cache, and feature flags ahead of schedule, they can accelerate the following areas:
+
+#### 1. Chart Data API (Week 7-8 Scope)
+- Build the REST endpoints that read Explainability and Benchmark results from PostgreSQL and format them for the dashboard.
+- Define the JSON schema for the ERI line chart and benchmark comparison charts for Person C to consume.
+
+#### 2. Integration & Cross-Cutting Concerns
+- **Data Plane Handshake**: Pair with Person A to ensure the Dispatcher and Worker correctly request policies from AEDE and execute the `DeliveryStrategy` interface.
+- **Telemetry Validation**: Validate that the `Telemetry` payloads emitted by A's Worker exactly match what the ERI computation expects.
+- **Simulator Validation**: Work with Person C to ensure the fault injection accurately triggers the expected ERI sub-metric failures.
+
+#### 3. Research Report Preparation (Week 11-12 Scope)
+- Begin drafting the System Design and Evaluation methodology chapters for the final report based on the implemented AEDE architecture.
+- Finalize the statistical summary structures needed to prove the research hypothesis once benchmark data is available.
 
 ---
 

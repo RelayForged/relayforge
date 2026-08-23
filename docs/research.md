@@ -225,6 +225,64 @@ If time permits, a lightweight weight sensitivity analysis should be included as
 
 This is a bonus section, not a primary contribution. Do not block the primary evaluation on it.
 
+## Future Work: Offline Reinforcement Learning for Weight Optimisation
+
+The current ERI implementation uses expert-defined, static weights (e.g., 35% success rate, 20% latency). These weights are disclosed design parameters — reasonable defaults validated through benchmark experiments. However, the architecture naturally accommodates a more principled weight discovery process through **offline reinforcement learning**.
+
+### Motivation
+
+Different deployment environments exhibit different failure signatures. An endpoint ecosystem dominated by timeout-prone services may benefit from higher `timeout_weight`; one dominated by intermittent 5xx errors may benefit from higher `http_5xx_weight`. Expert-defined weights cannot anticipate every deployment context. A data-driven approach to weight discovery would allow AEDE to adapt its sensitivity profile to the specific failure patterns observed in a given environment.
+
+### Proposed Approach
+
+```
+Production (weights v1, frozen, deterministic)
+        │
+        │  telemetry + delivery outcomes accumulate in PostgreSQL
+        ▼
+Offline RL Training (reads historical data, explores weight space freely)
+        │
+        │  produces candidate weight configuration v2
+        ▼
+Validation (run v2 against benchmark scenarios using Endpoint Simulator)
+        │
+        │  operator reviews and approves
+        ▼
+Production (weights v2, frozen, deterministic)
+```
+
+The RL agent operates entirely offline, outside the production delivery path:
+
+1. **Data collection**: The production system accumulates telemetry records and delivery outcomes in PostgreSQL as a natural byproduct of normal operation. No additional instrumentation is required — the existing `ExplainabilityRecord` and `DeliveryAttempt` entities already capture the necessary signal.
+
+2. **Offline training**: A batch RL process reads historical telemetry and experiments with alternative weight configurations. The reward signal optimises for a composite objective (e.g., minimise failed deliveries, minimise recovery time, minimise unnecessary retries — with configurable tradeoff coefficients). All exploration happens offline against historical data. No production deliveries are affected.
+
+3. **Validation**: Candidate weight configurations are evaluated against the existing benchmark framework using the Endpoint Simulator. The same controlled failure scenarios (Scenarios 1–10) that validate the current weights are used to validate learned weights. Configurations that degrade performance on any scenario are rejected.
+
+4. **Promotion**: An operator reviews the learned weights, the benchmark results, and the RL training metrics before promoting the new configuration to production. This human-in-the-loop step ensures accountability and prevents pathological weight configurations from reaching production.
+
+5. **Versioning**: Each weight configuration is versioned. `ExplainabilityRecord` includes a `weight_version` field, enabling full traceability: for any historical policy decision, the exact weight configuration that produced it can be retrieved.
+
+### Determinism Guarantee
+
+This approach **fully preserves AEDE's determinism requirement**. At any point in time, the active weight configuration is frozen. Given identical telemetry and identical weights, AEDE produces identical policies. The RL agent never runs during policy evaluation — it runs offline, produces a static configuration artifact, and that artifact is deployed through the same mechanism as a manual `config.yaml` update.
+
+### Why Offline RL, Not Online RL
+
+Online RL (adjusting weights during live delivery) was considered and rejected for three reasons:
+
+1. **Exploration risk**: Online RL requires exploring suboptimal weight configurations during production delivery, deliberately degrading delivery quality for some events to improve future performance. This is unacceptable in an infrastructure system with delivery guarantees.
+
+2. **Determinism erosion**: Online weight updates mean two identical delivery attempts at slightly different times could receive different policies because the weights shifted between them. The determinism guarantee weakens from global to epoch-local, complicating reproducibility and explainability.
+
+3. **Reward signal complexity**: Designing a real-time reward function that correctly balances competing objectives (delivery speed vs. retry efficiency vs. endpoint protection) without causing pathological behaviour is a significant research challenge in its own right — one that is more safely explored offline.
+
+### Scope
+
+This is documented as future work. The current implementation demonstrates that the AEDE architecture produces measurably better delivery outcomes with expert-defined weights. The offline RL extension would demonstrate that the architecture can also *discover* better weights from operational data — without any structural changes to the policy engine, the explainability system, or the Control Plane / Data Plane boundary.
+
+---
+
 ## Research Artifacts
 
 1. **Adaptive Event Delivery Engine (AEDE)** — the proposed runtime policy framework.
