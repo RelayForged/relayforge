@@ -1,3 +1,4 @@
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from enum import Enum
 
 
@@ -13,8 +14,8 @@ class EndpointState(str, Enum):
     needing a custom encoder (e.g. "AVAILABLE" rather than <EndpointState.AVAILABLE>).
 
     This enum owns nothing beyond the named states. All transition logic lives in
-    relay/control_plane/state_machine/. All policy derivation lives in
-    relay/control_plane/aede/. This is the vocabulary, not the grammar.
+    platform/control_plane/state_machine/. All policy derivation lives in
+    platform/control_plane/aede/. This is the vocabulary, not the grammar.
     """
 
     AVAILABLE = "AVAILABLE"
@@ -52,3 +53,28 @@ class EndpointState(str, Enum):
     intervals, intensive monitoring.
     Successful sustained recovery transitions back to AVAILABLE.
     """
+
+
+
+
+class StateMachineThresholds(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    degradation_threshold: float = Field(ge=0.0, le=100.0)
+    degradation_recovery_threshold: float = Field(ge=0.0, le=100.0)
+    unstable_threshold: float = Field(ge=0.0, le=100.0)
+    unstable_recovery_threshold: float = Field(ge=0.0, le=100.0)
+    quarantine_threshold: float = Field(ge=0.0, le=100.0)
+    recovery_threshold: float = Field(ge=0.0, le=100.0)
+
+    @model_validator(mode="after")
+    def validate_hysteresis(self) -> "StateMachineThresholds":
+        if self.degradation_recovery_threshold <= self.degradation_threshold:
+            raise ValueError("Hysteresis violation: degradation_recovery_threshold must be strictly greater than degradation_threshold.")
+        if self.unstable_recovery_threshold <= self.unstable_threshold:
+            raise ValueError("Hysteresis violation: unstable_recovery_threshold must be strictly greater than unstable_threshold.")
+        return self
+
+    @classmethod
+    def from_config(cls, config_dict: dict) -> "StateMachineThresholds":
+        return cls(**config_dict)

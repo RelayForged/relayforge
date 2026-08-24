@@ -52,7 +52,7 @@ The tradeoff — that count-based windows respond differently for high vs low-vo
 eri = compute_eri(
     telemetry=records,
     window_size=100,
-    window_cutoff=datetime(2024, 1, 15, 10, 0, 0)  # explicit, from caller
+    window_cutoff=datetime(2026, 1, 15, 10, 0, 0)  # explicit, from caller
 )
 
 # Wrong — reads wall-clock inside the function
@@ -77,7 +77,7 @@ For the research evaluation, experiments use fixed event datasets replayed from 
 **Positive:**
 - ERI computation is a pure function of its inputs. Unit tests are stable regardless of when they run.
 - Benchmark experiments are fully reproducible: the same dataset with the same configuration always produces the same policy decisions.
-- The time cutoff as an explicit parameter also enables historical policy replay — "what would AEDE have decided at T=2024-01-15 10:00:00?" becomes computable.
+- The time cutoff as an explicit parameter also enables historical policy replay — "what would AEDE have decided at T=2026-01-15 10:00:00?" becomes computable.
 
 **Negative:**
 - The calling code is responsible for providing the cutoff timestamp. This is a leaky abstraction — the caller must know to provide this parameter correctly.

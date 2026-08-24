@@ -40,7 +40,7 @@ The storage system must satisfy:
 
 Use **PostgreSQL 15+** as the primary database.
 
-PostgreSQL is the sole durable store for all platform data. Redis is used as a secondary cache for hot policy data and ERI snapshots (see ADR 0003 for caching rationale).
+PostgreSQL is the sole durable store for all platform data. Redis is used as a secondary cache for hot policy data and ERI snapshots (see ADR 0011 for caching rationale).
 
 Key schema design decisions that follow from this choice:
 

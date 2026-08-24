@@ -1,3 +1,4 @@
+import math
 from datetime import datetime, timezone
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -15,7 +16,7 @@ class ERIScore(BaseModel):
     is a deliberate explainability choice: every ExplainabilityRecord can reference
     this object directly and answer "which metric contributed what?"
 
-    Computation lives in relay/control_plane/eri/. This class is the return type
+    Computation lives in platform/control_plane/eri/. This class is the return type
     only — it performs no calculation itself.
 
     Windowing: attempt-count only. No time-based filter. See ADR 0009.
@@ -95,7 +96,7 @@ class ERIScore(BaseModel):
     # --- Observation metadata (for explainability) ---
 
     window_size: int = Field(
-        gt=0,
+        ge=0,
         description="Number of DeliveryAttempts included in this evaluation.",
     )
 
@@ -153,3 +154,31 @@ class ERIScore(BaseModel):
             window_size=window_size,
             computed_at=computed_at or datetime.now(timezone.utc),
         )
+
+
+
+
+class ERIWeights(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    success_rate_weight: float = Field(ge=0.0, le=1.0)
+    latency_weight: float = Field(ge=0.0, le=1.0)
+    consecutive_failures_weight: float = Field(ge=0.0, le=1.0)
+    timeout_weight: float = Field(ge=0.0, le=1.0)
+    http_5xx_weight: float = Field(ge=0.0, le=1.0)
+    queue_depth_weight: float = Field(ge=0.0, le=1.0)
+    recovery_trend_weight: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def check_weights_sum_to_one(self) -> "ERIWeights":
+        total_weight = (
+            self.success_rate_weight + self.latency_weight + self.consecutive_failures_weight + 
+            self.timeout_weight + self.http_5xx_weight + self.queue_depth_weight + self.recovery_trend_weight
+        )
+        if not math.isclose(total_weight, 1.0, rel_tol=1e-5):
+            raise ValueError(f"ERI weights must sum to 1.0, but sum to {total_weight}")
+        return self
+
+    @classmethod
+    def from_config(cls, config_dict: dict) -> "ERIWeights":
+        return cls(**config_dict)

@@ -77,7 +77,7 @@ Goal: end-to-end delivery with a controllable simulator target.
 - [ ] PostgreSQL repositories: Endpoint, Subscription, Delivery, DeliveryAttempt
 - [ ] Basic telemetry stored after each attempt
 - [ ] Strategy A retry — built flag-switchable from day one. Do not hardcode it. The delivery worker reads from a `DeliveryStrategy` interface; Strategy A is the first implementation. This shape must be compatible with B and C in Week 5–6 without refactoring.
-- [ ] Endpoint Simulator: standalone FastAPI service, controllable via `POST /simulator/config`. Supports four distinct failure modes (see Simulator Semantics below).
+- [ ] Endpoint Simulator: standalone FastAPI service, controllable via `POST /simulator/config`. Supports six distinct failure modes (see Simulator Semantics below).
 
 **Deliverable**: events publish → Kafka → worker → hits simulator → retry on failure. All visible in DB.
 
@@ -91,10 +91,12 @@ Specify this now — different failure types produce different ERI sub-metric va
 | `timeout` | Holds connection open until client times out | Timeout rate, average latency |
 | `slow` | Responds 200 OK but with configurable delay (e.g. 3–8 seconds) | Average latency only — success rate unaffected |
 | `rate_limit` | Returns 429 Too Many Requests | HTTP 5xx rate (treated as delivery failure for ERI), success rate |
+| `connection_reset` | Closes TCP connection before responding | Timeout rate, consecutive failures, success rate |
+| `auth_failure` | Returns 401 or 403 (configurable) | Success rate, HTTP error rate |
 
 Config API: `POST /simulator/config` with body `{"mode": "timeout", "rate": 0.6}` — applies `rate` fraction of requests to the given mode, the rest succeed normally. A `rate` of 1.0 means every request gets the failure mode.
 
-This matters for the research: if the simulator only ever produces 5xx errors, you can only show ERI responding to one sub-metric. Supporting all four modes lets you demonstrate that timeout-heavy degradation looks different from error-heavy degradation in both the ERI and the explainability records.
+This matters for the research: if the simulator only ever produces 5xx errors, you can only show ERI responding to one sub-metric. Supporting all six modes lets you demonstrate that timeout-heavy degradation looks different from error-heavy degradation in both the ERI and the explainability records, and covers all 10 benchmark failure scenarios.
 
 ---
 
@@ -141,9 +143,16 @@ Goal: a browser-based demo that makes the research contribution visible in real 
 Goal: quantitative comparison that proves the research claim.
 
 - [ ] Benchmark runner: automated experiment (configures simulator, runs events for N seconds, collects metrics, resets)
-- [ ] Three scenarios automated:
+- [ ] All 10 failure scenarios automated (each is a time-sequenced simulator configuration profile):
   - Scenario 1: intermittent timeouts (random 30% failure, mixed with slow responses)
+  - Scenario 2: high latency (gradually increasing response delay)
   - Scenario 3: burst failures (sudden 100% failure for 60 seconds, then recovery)
+  - Scenario 4: endpoint outage (extended unavailability)
+  - Scenario 5: partial recovery (alternating success and failure)
+  - Scenario 6: credential failure (HTTP 401/403 responses)
+  - Scenario 7: connection failure (connection reset / TLS error)
+  - Scenario 8: rate limiting (HTTP 429 responses)
+  - Scenario 9: network partition (endpoint unreachable, connection timeout)
   - Scenario 10: slow degradation (success rate decreases linearly from 100% to 0% over 5 minutes — best shows AEDE advantage)
 - [ ] Results stored to PostgreSQL
 - [ ] Benchmark chart in dashboard: Strategy A vs B vs C on same axes (retry count, recovery time, delivery success rate)
@@ -206,9 +215,6 @@ Each person owns their vertical. All three own Docker Compose config, integratio
 - Retry Manager (all three strategies via `DeliveryStrategy` interface)
 - PostgreSQL repositories
 - Three-tier policy fallback wiring + Redis TTL
-- Python SDK
-- **Benchmark runner + scenario definitions** — scenarios are "drive controlled failure through the pipeline and record what happens," which sits squarely in A's existing context (Retry Manager, Dispatcher, Simulator interaction). A does not need to understand policy synthesis to implement this.
-- Benchmark result storage (writes to PostgreSQL)
 
 ### Person B — AEDE / Research Core
 
@@ -219,6 +225,9 @@ Each person owns their vertical. All three own Docker Compose config, integratio
 - Feature flag switching (Strategy A / B / C)
 - Chart data API (reads benchmark results from PostgreSQL, formats for dashboard)
 - Overall architecture decisions and cross-cutting concerns
+- Python SDK: `publish_event()`, `register_endpoint()` — thin REST wrapper around A's ingestion API
+- **Benchmark runner + scenario definitions** — B understands the research scenarios, ERI sub-metric triggers, and what each experiment needs to prove. Reassigned from A to rebalance workload and keep the full research evaluation pipeline (run benchmarks → store results → format for dashboard) under one owner.
+- Benchmark result storage (writes to PostgreSQL)
 
 > **Week 5 checkpoint (end of Week 5, not Week 6)**: All three team members review B's progress together. If ERI computation, the state machine, and the Policy Synthesizer are not functioning by this point, A or C pairs with B immediately on the two most mechanical remaining pieces — explainability record persistence and feature flag wiring — freeing B to focus on any policy logic that isn't yet correct. This checkpoint exists so a slip is caught with a full week of buffer remaining, not discovered at the Week 6 deadline.
 
