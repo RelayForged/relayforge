@@ -1,72 +1,138 @@
+from __future__ import annotations
+
 from datetime import datetime, timezone
+from typing import Any
 
-from .models import (
-    DeliveryEvent,
-    ERIPoint,
-    PolicyDecision,
-    PolicyExplanation,
-)
+def _timestamp() -> str:
+    """Return a UTC ISO-8601 timestamp for dashboard data."""
+    return datetime.now(timezone.utc).isoformat()
 
 
-DEMO_DELIVERY_EVENTS: list[DeliveryEvent] = [
-    {
-        "id": 1,
-        "timestamp": "12:34:01",
-        "type": "REQUEST_RECEIVED",
-    },
-    {
-        "id": 2,
-        "timestamp": "12:34:02",
-        "type": "ROUTE_SELECTED",
-    },
-    {
-        "id": 3,
-        "timestamp": "12:34:03",
-        "type": "DELIVERY_ATTEMPT",
-    },
-    {
-        "id": 4,
-        "timestamp": "12:34:04",
-        "type": "DELIVERY_SUCCESS",
-    },
-]
+def _get_value(obj: Any, *names: str, default: Any = None) -> Any:
+    """Safely read an attribute or dictionary key from an object."""
+    for name in names:
+        if isinstance(obj, dict) and name in obj:
+            return obj[name]
+
+        if hasattr(obj, name):
+            return getattr(obj, name)
+
+    return default
 
 
-DEMO_POLICY_DECISION: PolicyDecision = {
-    "decision": "PRIMARY",
-    "selected_target": "endpoint-A",
-    "reason": "Endpoint available",
-}
-
-
-DEMO_POLICY_EXPLANATION: PolicyExplanation = {
-    "title": "Why was PRIMARY selected?",
-    "reasons": [
-        "Endpoint-A is AVAILABLE",
-        "ERI: 100",
-        "No active quarantine",
-        "Primary route is currently preferred",
-    ],
-}
-
-
-def create_eri_point(value: int) -> ERIPoint:
+def create_eri_point(eri: int | float) -> dict[str, Any]:
+    """Convert an ERI value into the dashboard ERI-point contract."""
     return {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "value": value,
+        "timestamp": _timestamp(),
+        "value": int(eri),
     }
 
 
-def get_delivery_events() -> list[DeliveryEvent]:
-    return list(DEMO_DELIVERY_EVENTS)
+def get_delivery_events() -> list[dict[str, Any]]:
+    """
+    Return delivery events for the dashboard.
+
+    The delivery pipeline is not implemented yet, so the dashboard
+    deliberately exposes an empty collection rather than inventing
+    delivery data.
+    """
+    return []
 
 
-def get_policy_decision() -> PolicyDecision:
-    return dict(DEMO_POLICY_DECISION)
+def get_policy_decision(policy: Any | None = None) -> dict[str, Any]:
+    """Convert an existing policy result into the dashboard contract."""
+    if policy is None:
+        return {
+            "decision": "No policy decision",
+            "selected_target": "",
+            "reason": "",
+        }
 
+    decision = _get_value(
+        policy,
+        "decision",
+        "action",
+        "policy_decision",
+        default="",
+    )
 
-def get_policy_explanation() -> PolicyExplanation:
+    selected_target = _get_value(
+        policy,
+        "selected_target",
+        "target",
+        "endpoint_id",
+        default="",
+    )
+
+    reason = _get_value(
+        policy,
+        "reason",
+        default="",
+    )
+
     return {
-        "title": DEMO_POLICY_EXPLANATION["title"],
-        "reasons": list(DEMO_POLICY_EXPLANATION["reasons"]),
+        "decision": str(decision),
+        "selected_target": str(selected_target),
+        "reason": str(reason),
+    }
+
+
+def get_policy_explanation(explanation: Any | None = None) -> dict[str, Any]:
+    """Convert an existing explainability result into the dashboard contract."""
+    if explanation is None:
+        return {
+            "title": "No explanation available",
+            "reasons": [],
+        }
+
+    title = _get_value(
+        explanation,
+        "title",
+        "reason",
+        default="",
+    )
+
+    reasons = _get_value(
+        explanation,
+        "reasons",
+        "triggered_thresholds",
+        "policy_changes",
+        default=[],
+    )
+
+    if reasons is None:
+        reasons = []
+
+    if not isinstance(reasons, list):
+        reasons = [str(reasons)]
+
+    return {
+        "title": str(title),
+        "reasons": [str(reason) for reason in reasons],
+    }
+
+
+def build_state_update(
+    *,
+    state: Any,
+    eri: int | float,
+    eri_history: list[dict[str, Any]] | None = None,
+    policy: Any | None = None,
+    explanation: Any | None = None,
+) -> dict[str, Any]:
+    """
+    Build the stable dashboard state-update contract.
+
+    This is the integration boundary between teammate implementations
+    and the dashboard. Teammate-specific objects should be translated
+    here instead of being passed directly to the React frontend.
+    """
+    return {
+        "type": "state_update",
+        "state": str(state),
+        "eri": int(eri),
+        "eri_history": eri_history or [create_eri_point(eri)],
+        "delivery_events": get_delivery_events(),
+        "policy_decision": get_policy_decision(policy),
+        "policy_explanation": get_policy_explanation(explanation),
     }
