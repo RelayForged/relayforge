@@ -10,13 +10,11 @@ import {
 } from "recharts";
 
 import "./App.css";
-import {
-  demoDeliveryEvents,
-  demoPolicyDecision,
-  demoPolicyExplanation,
-} from "./demoData";
+
+// Demo policy and delivery data are now supplied by the dashboard WebSocket.
 
 const WS_URL = "ws://127.0.0.1:8001/ws";
+const RECONNECT_DELAY = 3000;
 
 function formatTime(timestamp) {
   if (!timestamp) {
@@ -52,17 +50,20 @@ function getStatusClass(state) {
 
 function App() {
   const [dashboardState, setDashboardState] = useState({
-    state: "UNKNOWN",
-    eri: null,
-    eri_history: [],
-  });
+  state: "UNKNOWN",
+  eri: null,
+  eri_history: [],
+  delivery_events: [],
+  policy_decision: null,
+  policy_explanation: null,
+});
 
   const [connectionStatus, setConnectionStatus] = useState("connecting");
   const [lastUpdate, setLastUpdate] = useState(null);
 
   useEffect(() => {
-    let socket;
-    let reconnectTimer;
+    let socket = null;
+    let reconnectTimer = null;
     let stopped = false;
 
     const connect = () => {
@@ -72,39 +73,88 @@ function App() {
 
       setConnectionStatus("connecting");
 
-      socket = new WebSocket(WS_URL);
+      try {
+        socket = new WebSocket(WS_URL);
+      } catch {
+        setConnectionStatus("error");
+
+        reconnectTimer = window.setTimeout(
+          connect,
+          RECONNECT_DELAY,
+        );
+
+        return;
+      }
 
       socket.onopen = () => {
-        setConnectionStatus("connected");
+        if (!stopped) {
+          setConnectionStatus("connected");
+        }
       };
 
       socket.onmessage = (event) => {
         try {
           const message = JSON.parse(event.data);
 
-          if (message.type !== "state_update") {
+          if (
+            !message ||
+            typeof message !== "object" ||
+            message.type !== "state_update"
+          ) {
             return;
           }
 
+          const nextState =
+            typeof message.state === "string"
+              ? message.state
+              : "UNKNOWN";
+
+          const nextEri =
+            typeof message.eri === "number"
+              ? message.eri
+              : null;
+
+          const nextHistory = Array.isArray(message.eri_history)
+            ? message.eri_history.filter(
+                (point) =>
+                  point &&
+                  typeof point === "object" &&
+                  typeof point.timestamp === "string" &&
+                  typeof point.value === "number",
+              )
+            : [];
+
           setDashboardState({
-            state: message.state || "UNKNOWN",
-            eri:
-              typeof message.eri === "number"
-                ? message.eri
-                : null,
-            eri_history: Array.isArray(message.eri_history)
-              ? message.eri_history
-              : [],
-          });
+  state: nextState,
+  eri: nextEri,
+  eri_history: nextHistory,
+  delivery_events: Array.isArray(message.delivery_events)
+    ? message.delivery_events
+    : [],
+  policy_decision:
+    message.policy_decision &&
+    typeof message.policy_decision === "object"
+      ? message.policy_decision
+      : null,
+  policy_explanation:
+    message.policy_explanation &&
+    typeof message.policy_explanation === "object"
+      ? message.policy_explanation
+      : null,
+});
 
           setLastUpdate(new Date());
+
+          setConnectionStatus("connected");
         } catch {
           setConnectionStatus("error");
         }
       };
 
       socket.onerror = () => {
-        setConnectionStatus("error");
+        if (!stopped) {
+          setConnectionStatus("error");
+        }
       };
 
       socket.onclose = () => {
@@ -114,9 +164,10 @@ function App() {
 
         setConnectionStatus("error");
 
-        reconnectTimer = window.setTimeout(() => {
-          connect();
-        }, 3000);
+        reconnectTimer = window.setTimeout(
+          connect,
+          RECONNECT_DELAY,
+        );
       };
     };
 
@@ -125,7 +176,9 @@ function App() {
     return () => {
       stopped = true;
 
-      window.clearTimeout(reconnectTimer);
+      if (reconnectTimer) {
+        window.clearTimeout(reconnectTimer);
+      }
 
       if (socket) {
         socket.close();
@@ -150,13 +203,19 @@ function App() {
     <main className="dashboard">
       <header className="dashboard-header">
         <div>
-          <h1 className="dashboard-title">RelayForge Dashboard</h1>
+          <h1 className="dashboard-title">
+            RelayForge Dashboard
+          </h1>
+
           <p className="dashboard-subtitle">
-            Reliability, delivery, policy, and explainability overview
+            Reliability, delivery, policy, and explainability
+            overview
           </p>
         </div>
 
-        <div className={`connection-indicator ${connectionStatus}`}>
+        <div
+          className={`connection-indicator ${connectionStatus}`}
+        >
           <span className="connection-dot" />
           {connectionLabel}
         </div>
@@ -167,6 +226,7 @@ function App() {
           <div className="card-header">
             <div>
               <h2 className="card-title">Endpoint State</h2>
+
               <p className="card-description">
                 Current endpoint availability
               </p>
@@ -187,7 +247,10 @@ function App() {
         <article className="dashboard-card eri-card">
           <div className="card-header">
             <div>
-              <h2 className="card-title">Endpoint Reliability Index</h2>
+              <h2 className="card-title">
+                Endpoint Reliability Index
+              </h2>
+
               <p className="card-description">
                 Current reliability score
               </p>
@@ -198,6 +261,7 @@ function App() {
             <span className="eri-value">
               {dashboardState.eri ?? "--"}
             </span>
+
             <span className="eri-scale">/ 100</span>
           </div>
 
@@ -210,6 +274,7 @@ function App() {
           <div className="card-header">
             <div>
               <h2 className="card-title">Dashboard Stream</h2>
+
               <p className="card-description">
                 FastAPI WebSocket connection
               </p>
@@ -224,7 +289,7 @@ function App() {
               "Connecting to dashboard backend..."}
 
             {connectionStatus === "error" &&
-              "Dashboard backend is unavailable."}
+              "Dashboard backend is unavailable. Retrying automatically..."}
           </div>
 
           <div className="metric-label">
@@ -237,6 +302,7 @@ function App() {
           <div className="card-header">
             <div>
               <h2 className="card-title">ERI History</h2>
+
               <p className="card-description">
                 Recent reliability observations
               </p>
@@ -249,7 +315,10 @@ function App() {
                 Waiting for ERI history...
               </div>
             ) : (
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer
+                width="100%"
+                height="100%"
+              >
                 <LineChart
                   data={chartData}
                   margin={{
@@ -290,7 +359,10 @@ function App() {
         <article className="dashboard-card timeline-card">
           <div className="card-header">
             <div>
-              <h2 className="card-title">Delivery Timeline</h2>
+              <h2 className="card-title">
+                Delivery Timeline
+              </h2>
+
               <p className="card-description">
                 Recent delivery activity
               </p>
@@ -300,10 +372,10 @@ function App() {
           </div>
 
           <div className="timeline">
-            {demoDeliveryEvents.map((event) => (
+            {dashboardState.delivery_events.map((event) => (
               <div
                 className="timeline-event"
-                key={`${event.timestamp}-${event.type}`}
+                key={event.id}
               >
                 <span className="timeline-time">
                   {event.timestamp}
@@ -320,7 +392,10 @@ function App() {
         <article className="dashboard-card policy-card">
           <div className="card-header">
             <div>
-              <h2 className="card-title">Policy Decision</h2>
+              <h2 className="card-title">
+                Policy Decision
+              </h2>
+
               <p className="card-description">
                 Current routing decision
               </p>
@@ -331,23 +406,32 @@ function App() {
 
           <div className="policy-decision">
             <div className="policy-row">
-              <span className="policy-label">Decision</span>
+              <span className="policy-label">
+                Decision
+              </span>
+
               <span className="policy-value">
-                {demoPolicyDecision.decision}
+                {dashboardState.policy_decision?.decision ?? "--"}
               </span>
             </div>
 
             <div className="policy-row">
-              <span className="policy-label">Selected target</span>
+              <span className="policy-label">
+                Selected target
+              </span>
+
               <span className="policy-value">
-                {demoPolicyDecision.selectedTarget}
+                {dashboardState.policy_decision?.selected_target ?? "--"}
               </span>
             </div>
 
             <div className="policy-row">
-              <span className="policy-label">Reason</span>
+              <span className="policy-label">
+                Reason
+              </span>
+
               <span className="policy-value">
-                {demoPolicyDecision.reason}
+                {dashboardState.policy_decision?.reason ?? "--"}
               </span>
             </div>
           </div>
@@ -356,7 +440,10 @@ function App() {
         <article className="dashboard-card explanation-card">
           <div className="card-header">
             <div>
-              <h2 className="card-title">Explainability</h2>
+              <h2 className="card-title">
+                Explainability
+              </h2>
+
               <p className="card-description">
                 Why the current decision was made
               </p>
@@ -367,13 +454,15 @@ function App() {
 
           <div>
             <h3 className="explanation-title">
-              Decision factors
+              {dashboardState.policy_explanation?.title ?? "Waiting for policy explanation..."}
             </h3>
 
             <ul className="explanation-list">
-              {demoPolicyExplanation.reasons.map((reason) => (
-                <li key={reason}>{reason}</li>
-              ))}
+              {(dashboardState.policy_explanation?.reasons ?? []).map(
+  (reason) => (
+                  <li key={reason}>{reason}</li>
+                ),
+              )}
             </ul>
           </div>
         </article>
