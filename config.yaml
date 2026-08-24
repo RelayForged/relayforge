@@ -1,0 +1,80 @@
+# Relay Platform — Configuration
+#
+# This file is the single source of truth for all configurable thresholds and weights.
+# No numeric threshold or weight is hardcoded in source code — everything lives here.
+#
+# Weights in the `eri` section must sum to exactly 1.0.
+# The platform validates this constraint at startup.
+#
+# Values below are the initial research defaults from arch.md.
+# Modify only via this file — never via environment variables or source code.
+# Benchmark experiments change these values to compare strategy configurations.
+
+eri:
+  # Number of most-recent DeliveryAttempts included in each ERI evaluation.
+  # Attempt-count window only — no time-based filter. See ADR 0009.
+  window_size: 50
+
+  # Weights for each sub-metric. Must sum to exactly 1.0.
+  # These are disclosed design parameters, not optimised values.
+  # The research contribution is the AEDE framework, not the specific weights.
+  success_rate_weight: 0.35
+  latency_weight: 0.20
+  consecutive_failures_weight: 0.20
+  timeout_weight: 0.10
+  http_5xx_weight: 0.05
+  queue_depth_weight: 0.05
+  recovery_trend_weight: 0.05
+  # Sum: 0.35 + 0.20 + 0.20 + 0.10 + 0.05 + 0.05 + 0.05 = 1.00 ✓
+
+  # Latency: response times below this are scored as fully healthy (score = 1.0).
+  # Times above this decay the latency sub-score toward 0.0.
+  baseline_latency_ms: 500
+
+  # Latency: response time at which the latency sub-score reaches 0.0.
+  max_latency_ms: 10000
+
+  # Consecutive failures: streak length at which the sub-score reaches 0.0.
+  max_consecutive_failures: 10
+
+  # Queue depth: number of queued events at which the sub-score reaches 0.0.
+  max_queue_depth: 500
+
+state_machine:
+  # ERI thresholds that trigger state transitions.
+  # Degradation thresholds are LOWER than recovery thresholds — this is hysteresis.
+  # The platform trusts failure quickly and trusts recovery cautiously. See ADR 0008.
+
+  # AVAILABLE → OBSERVED_DEGRADATION  (if ERI drops below this)
+  degradation_threshold: 80
+
+  # OBSERVED_DEGRADATION → AVAILABLE  (if ERI rises above this — hysteresis gap of 10)
+  degradation_recovery_threshold: 90
+
+  # OBSERVED_DEGRADATION → UNSTABLE  (if ERI drops below this)
+  unstable_threshold: 60
+
+  # UNSTABLE → OBSERVED_DEGRADATION  (if ERI rises above this — hysteresis gap of 10)
+  unstable_recovery_threshold: 70
+
+  # UNSTABLE → QUARANTINED  (if ERI drops below this, sustained over the window)
+  quarantine_threshold: 30
+
+  # RECOVERING → AVAILABLE  (if ERI exceeds this, sustained over recovery_window_size)
+  recovery_threshold: 90
+
+  # Number of consecutive successful probe attempts required to leave RECOVERING.
+  # Enforces conservative recovery — stability must be demonstrated, not just observed once.
+  recovery_window_size: 5
+
+adaptive_policy:
+  # How long an endpoint stays QUARANTINED before a recovery probe is attempted (seconds).
+  quarantine_duration_seconds: 300
+
+  # Maximum number of events replayed per batch after quarantine recovery.
+  # Prevents a replay storm overwhelming a just-recovered endpoint.
+  replay_batch_size: 50
+
+  # Maximum parallel delivery streams during RECOVERING state.
+  # Gradual restoration: single-stream only until AVAILABLE is confirmed.
+  recovery_parallelism: 1
