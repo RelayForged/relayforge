@@ -4,55 +4,13 @@ from datetime import datetime, timezone
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from .models import (
-    DeliveryEvent,
-    ERIPoint,
-    PolicyDecision,
-    PolicyExplanation,
-    StateUpdate,
+from .adapter import (
+    create_eri_point,
+    get_delivery_events,
+    get_policy_decision,
+    get_policy_explanation,
 )
-
-
-DEMO_DELIVERY_EVENTS: list[DeliveryEvent] = [
-    {
-        "id": 1,
-        "timestamp": "12:34:01",
-        "type": "REQUEST_RECEIVED",
-    },
-    {
-        "id": 2,
-        "timestamp": "12:34:02",
-        "type": "ROUTE_SELECTED",
-    },
-    {
-        "id": 3,
-        "timestamp": "12:34:03",
-        "type": "DELIVERY_ATTEMPT",
-    },
-    {
-        "id": 4,
-        "timestamp": "12:34:04",
-        "type": "DELIVERY_SUCCESS",
-    },
-]
-
-
-DEMO_POLICY_DECISION: PolicyDecision = {
-    "decision": "PRIMARY",
-    "selected_target": "endpoint-A",
-    "reason": "Endpoint available",
-}
-
-
-DEMO_POLICY_EXPLANATION: PolicyExplanation = {
-    "title": "Why was PRIMARY selected?",
-    "reasons": [
-        "Endpoint-A is AVAILABLE",
-        "ERI: 100",
-        "No active quarantine",
-        "Primary route is currently preferred",
-    ],
-}
+from .models import ERIPoint, StateUpdate
 
 
 async def send_state_update(websocket: WebSocket) -> None:
@@ -65,15 +23,8 @@ async def send_state_update(websocket: WebSocket) -> None:
             change = random.choice([-2, -1, 0, 0, 0, 1, 2])
             eri = max(0, min(100, eri + change))
 
-            now = datetime.now(timezone.utc)
-
-            history.append(
-                {
-                    "timestamp": now.isoformat(),
-                    "value": eri,
-                }
-            )
-
+            point = create_eri_point(eri)
+            history.append(point)
             history = history[-30:]
 
             message: StateUpdate = {
@@ -81,9 +32,9 @@ async def send_state_update(websocket: WebSocket) -> None:
                 "state": "AVAILABLE",
                 "eri": eri,
                 "eri_history": history,
-                "delivery_events": DEMO_DELIVERY_EVENTS,
-                "policy_decision": DEMO_POLICY_DECISION,
-                "policy_explanation": DEMO_POLICY_EXPLANATION,
+                "delivery_events": get_delivery_events(),
+                "policy_decision": get_policy_decision(),
+                "policy_explanation": get_policy_explanation(),
             }
 
             await websocket.send_json(message)
