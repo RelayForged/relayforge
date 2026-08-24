@@ -133,16 +133,26 @@ Cover:
 
 Since B has completed the AEDE core, strategies, cache, and feature flags ahead of schedule, they can accelerate the following areas:
 
-#### 1. Chart Data API (Week 7-8 Scope)
+#### 1. Python SDK (Reassigned from A)
+- `publish_event()`, `register_endpoint()` — thin REST wrapper around A's ingestion API (`POST /events`, `POST /endpoints`, `POST /subscriptions`)
+- Required for the benchmark runner and demo script
+
+#### 2. Benchmark Runner + Scenario Definitions (Reassigned from A)
+- Automated experiment script: configure simulator → publish events via SDK → collect metrics → reset → repeat per strategy
+- Define and implement all 10 failure scenarios from `docs/research.md`
+- Benchmark result storage to PostgreSQL
+- B owns the full research evaluation pipeline: run benchmarks → store results → format for dashboard (Chart Data API)
+
+#### 3. Chart Data API (Week 7-8 Scope)
 - Build the REST endpoints that read Explainability and Benchmark results from PostgreSQL and format them for the dashboard.
 - Define the JSON schema for the ERI line chart and benchmark comparison charts for Person C to consume.
 
-#### 2. Integration & Cross-Cutting Concerns
+#### 4. Integration & Cross-Cutting Concerns
 - **Data Plane Handshake**: Pair with Person A to ensure the Dispatcher and Worker correctly request policies from AEDE and execute the `DeliveryStrategy` interface.
 - **Telemetry Validation**: Validate that the `Telemetry` payloads emitted by A's Worker exactly match what the ERI computation expects.
 - **Simulator Validation**: Work with Person C to ensure the fault injection accurately triggers the expected ERI sub-metric failures.
 
-#### 3. Research Report Preparation (Week 11-12 Scope)
+#### 5. Research Report Preparation (Week 11-12 Scope)
 - Begin drafting the System Design and Evaluation methodology chapters for the final report based on the implemented AEDE architecture.
 - Finalize the statistical summary structures needed to prove the research hypothesis once benchmark data is available.
 
@@ -176,9 +186,6 @@ Since B has completed the AEDE core, strategies, cache, and feature flags ahead 
 
 - [ ] Wire Dispatcher to request policy from AEDE before assigning work to workers
 - [ ] Three-tier fallback wiring using B's `PolicyCache` interface (AEDE → Redis → static)
-- [ ] Python SDK: `publish_event()`, `register_endpoint()` — thin REST wrapper
-- [ ] Benchmark runner skeleton: automated (configure simulator → publish events → collect metrics → reset)
-- [ ] Benchmark result storage to PostgreSQL
 
 ---
 

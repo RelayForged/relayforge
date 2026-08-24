@@ -215,9 +215,6 @@ Each person owns their vertical. All three own Docker Compose config, integratio
 - Retry Manager (all three strategies via `DeliveryStrategy` interface)
 - PostgreSQL repositories
 - Three-tier policy fallback wiring + Redis TTL
-- Python SDK
-- **Benchmark runner + scenario definitions** — scenarios are "drive controlled failure through the pipeline and record what happens," which sits squarely in A's existing context (Retry Manager, Dispatcher, Simulator interaction). A does not need to understand policy synthesis to implement this.
-- Benchmark result storage (writes to PostgreSQL)
 
 ### Person B — AEDE / Research Core
 
@@ -228,6 +225,9 @@ Each person owns their vertical. All three own Docker Compose config, integratio
 - Feature flag switching (Strategy A / B / C)
 - Chart data API (reads benchmark results from PostgreSQL, formats for dashboard)
 - Overall architecture decisions and cross-cutting concerns
+- Python SDK: `publish_event()`, `register_endpoint()` — thin REST wrapper around A's ingestion API
+- **Benchmark runner + scenario definitions** — B understands the research scenarios, ERI sub-metric triggers, and what each experiment needs to prove. Reassigned from A to rebalance workload and keep the full research evaluation pipeline (run benchmarks → store results → format for dashboard) under one owner.
+- Benchmark result storage (writes to PostgreSQL)
 
 > **Week 5 checkpoint (end of Week 5, not Week 6)**: All three team members review B's progress together. If ERI computation, the state machine, and the Policy Synthesizer are not functioning by this point, A or C pairs with B immediately on the two most mechanical remaining pieces — explainability record persistence and feature flag wiring — freeing B to focus on any policy logic that isn't yet correct. This checkpoint exists so a slip is caught with a full week of buffer remaining, not discovered at the Week 6 deadline.
 
