@@ -108,6 +108,10 @@
   grid-column: span 4;
 }
 
+.fault-card {
+  grid-column: span 4;
+}
+
 .chart-card {
   grid-column: span 8;
 }
@@ -223,10 +227,9 @@
 }
 
 .timeline-event {
-  display: grid;
-  grid-template-columns: 72px 1fr;
-  gap: 12px;
-  align-items: start;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   padding: 12px;
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -243,6 +246,50 @@
   color: var(--text-primary);
   font-size: 13px;
   font-weight: 650;
+}
+
+.timeline-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.timeline-status {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.timeline-success {
+  color: #166534;
+}
+
+.timeline-failure {
+  color: #991b1b;
+}
+
+.timeline-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.timeline-details > span {
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.timeline-mono {
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+}
+
+.timeline-error {
+  color: #991b1b;
 }
 
 .policy-decision {
@@ -273,6 +320,13 @@
   color: var(--text-primary);
   font-size: 14px;
   font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.policy-mono {
+  font-family: var(--mono);
+  font-size: 12px;
+  word-break: break-all;
 }
 
 .explanation-title {
@@ -309,6 +363,145 @@
   text-transform: uppercase;
 }
 
+.explanation-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.explanation-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.explanation-label {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.explanation-value {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.explanation-section {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.explanation-section-title {
+  margin: 0 0 10px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.explanation-empty {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.explanation-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.explanation-metric {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.fault-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.fault-control {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fault-label {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.fault-range-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.fault-range-row input[type="range"] {
+  flex: 1;
+}
+
+.fault-value {
+  min-width: 64px;
+  color: var(--text-secondary);
+  font-family: var(--mono);
+  font-size: 12px;
+  text-align: right;
+}
+
+.fault-select {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.fault-apply {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--text-primary);
+  color: var(--surface);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.fault-apply:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.fault-apply:not(:disabled):hover {
+  opacity: 0.9;
+}
+
+@media (max-width: 600px) {
+  .explanation-grid,
+  .explanation-metrics {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 900px) {
   .dashboard {
     padding: 24px;
@@ -317,6 +510,7 @@
   .state-card,
   .eri-card,
   .stream-card,
+  .fault-card,
   .chart-card,
   .timeline-card,
   .policy-card,
@@ -347,8 +541,9 @@
     gap: 4px;
   }
 
-  .timeline-event {
-    grid-template-columns: 1fr;
+  .timeline-main {
+    align-items: flex-start;
+    flex-direction: column;
     gap: 4px;
   }
 }
