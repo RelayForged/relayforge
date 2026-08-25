@@ -48,31 +48,43 @@ class DashboardDemoSource:
     def _make_attempt(self) -> Telemetry:
         self.attempt_number += 1
 
-        # Deterministic demo pattern:
-        # every 4th attempt fails. This makes the ERI visibly change
-        # during a dashboard demonstration without directly inventing
-        # an ERI value.
-        failure = self.attempt_number % 4 == 0
+        # Phase 1: healthy operation.
+        if self.attempt_number <= 10:
+            succeeded = True
+            timed_out = False
+            latency_ms = 150.0
+            http_status = 200
 
-        if failure:
-            # Alternate between a slow 5xx and a timeout so that
-            # different ERI dimensions are exercised.
-            if self.attempt_number % 8 == 0:
+        # Phase 2: sustained degradation.
+        # Four out of every five attempts fail.
+        elif self.attempt_number <= 30:
+            failure = self.attempt_number % 5 != 0
+
+            if not failure:
+                succeeded = True
+                timed_out = False
+                latency_ms = 150.0
+                http_status = 200
+
+            elif self.attempt_number % 2 == 0:
+                succeeded = False
                 timed_out = True
                 latency_ms = 3000.0
                 http_status = None
+
             else:
+                succeeded = False
                 timed_out = False
                 latency_ms = 1800.0
                 http_status = 500
 
-            succeeded = False
-
+        # Phase 3: severe outage.
+        # Sustained timeouts drive ERI below the quarantine threshold.
         else:
-            timed_out = False
-            latency_ms = 150.0
-            http_status = 200
-            succeeded = True
+            succeeded = False
+            timed_out = True
+            latency_ms = 3000.0
+            http_status = None
 
         return Telemetry(
             attempt_id=f"dashboard-demo-attempt-{self.attempt_number}",

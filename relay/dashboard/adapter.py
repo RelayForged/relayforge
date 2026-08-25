@@ -21,6 +21,28 @@ def _get_value(obj: Any, *names: str, default: Any = None) -> Any:
     return default
 
 
+def _to_float_dict(value: Any) -> dict[str, float]:
+    """Convert mapping-like or Pydantic metric objects to JSON-safe data."""
+    if value is None:
+        return {}
+
+    if hasattr(value, "model_dump"):
+        value = value.model_dump()
+
+    if isinstance(value, dict):
+        result: dict[str, float] = {}
+
+        for key, item in value.items():
+            try:
+                result[str(key)] = float(item)
+            except (TypeError, ValueError):
+                continue
+
+        return result
+
+    return {}
+
+
 def create_eri_point(eri: int | float) -> dict[str, Any]:
     """Convert an ERI value into the dashboard ERI-point contract."""
     return {
@@ -28,6 +50,89 @@ def create_eri_point(eri: int | float) -> dict[str, Any]:
         "value": int(eri),
     }
 
+def get_delivery_event(
+    delivery: Any,
+    attempt: Any,
+) -> dict[str, Any]:
+    """Translate delivery domain objects into a dashboard event."""
+    success = bool(_get_value(attempt, "success", default=False))
+
+    status = _get_value(
+        delivery,
+        "status",
+        default="",
+    )
+
+    http_status = _get_value(
+        attempt,
+        "http_status",
+        default=None,
+    )
+
+    error_message = _get_value(
+        attempt,
+        "error_message",
+        default=None,
+    )
+
+    started_at = _get_value(
+        attempt,
+        "started_at",
+        default=None,
+    )
+
+    if hasattr(started_at, "isoformat"):
+        started_at = started_at.isoformat()
+
+    event_type = "DELIVERY_SUCCESS" if success else "DELIVERY_FAILURE"
+
+    return {
+        "id": str(
+            _get_value(
+                attempt,
+                "attempt_id",
+                default="",
+            )
+        ),
+        "timestamp": str(started_at or ""),
+        "type": event_type,
+        "delivery_id": str(
+            _get_value(
+                delivery,
+                "delivery_id",
+                default="",
+            )
+        ),
+        "event_id": str(
+            _get_value(
+                delivery,
+                "event_id",
+                default="",
+            )
+        ),
+        "attempt_id": str(
+            _get_value(
+                attempt,
+                "attempt_id",
+                default="",
+            )
+        ),
+        "status": str(status),
+        "attempt_number": int(
+            _get_value(
+                attempt,
+                "attempt_number",
+                default=0,
+            )
+        ),
+        "http_status": http_status,
+        "success": success,
+        "error_message": (
+            str(error_message)
+            if error_message is not None
+            else None
+        ),
+    }
 
 def get_delivery_events() -> list[dict[str, Any]]:
     """
@@ -52,6 +157,11 @@ def get_policy_decision(policy: Any | None = None) -> dict[str, Any]:
 
     retry_policy = _get_value(policy, "retry_policy")
     concurrency_policy = _get_value(policy, "concurrency_policy")
+    throughput_limit = _get_value(
+        concurrency_policy,
+        "throughput_limit",
+        default=None,
+    )
     isolation_policy = _get_value(policy, "isolation_policy")
 
     isolation_action = _get_value(
@@ -99,6 +209,11 @@ def get_policy_decision(policy: Any | None = None) -> dict[str, Any]:
         "queue_priority": int(
             _get_value(concurrency_policy, "queue_priority", default=0)
         ),
+        "throughput_limit": (
+            int(throughput_limit)
+            if throughput_limit is not None
+            else None
+        ),
         "max_retries": int(
             _get_value(retry_policy, "max_retries", default=0)
         ),
@@ -141,6 +256,18 @@ def get_policy_explanation(
         explanation,
         "policy_changes",
         default=[],
+    )
+
+    metrics = _get_value(
+        explanation,
+        "metrics",
+        default={},
+    )
+
+    thresholds = _get_value(
+        explanation,
+        "thresholds",
+        default={},
     )
 
     reasons = []
@@ -193,6 +320,8 @@ def get_policy_explanation(
         "policy_changes": [
             str(item) for item in policy_changes or []
         ],
+        "metrics": _to_float_dict(metrics),
+        "thresholds": _to_float_dict(thresholds),
     }
 
 

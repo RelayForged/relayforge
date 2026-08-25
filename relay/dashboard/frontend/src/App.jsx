@@ -320,22 +320,58 @@ function App() {
                 No delivery events available.
               </div>
             ) : (
-              dashboardState.delivery_events.map(
-                (event) => (
-                  <div
-                    className="timeline-event"
-                    key={event.id}
-                  >
-                    <span className="timeline-time">
-                      {formatTime(event.timestamp)}
-                    </span>
+              dashboardState.delivery_events.map((event) => (
+  <div
+    className="timeline-event"
+    key={event.id}
+  >
+    <div className="timeline-main">
+      <span className="timeline-time">
+        {formatTime(event.timestamp)}
+      </span>
 
-                    <span className="timeline-type">
-                      {event.type}
-                    </span>
-                  </div>
-                ),
-              )
+      <span
+        className={`timeline-status ${
+          event.success
+            ? "timeline-success"
+            : "timeline-failure"
+        }`}
+      >
+        {event.type}
+      </span>
+    </div>
+
+    <div className="timeline-details">
+      <span>
+        Attempt #{event.attempt_number ?? "--"}
+      </span>
+
+      {event.http_status != null && (
+        <span>
+          HTTP {event.http_status}
+        </span>
+      )}
+
+      {event.status && (
+        <span>
+          {event.status}
+        </span>
+      )}
+
+      {event.delivery_id && (
+        <span className="timeline-mono">
+          Delivery: {event.delivery_id}
+        </span>
+      )}
+
+      {event.error_message && (
+        <span className="timeline-error">
+          {event.error_message}
+        </span>
+      )}
+    </div>
+  </div>
+))
             )}
           </div>
         </article>
@@ -354,47 +390,137 @@ function App() {
           </div>
 
           <div className="policy-decision">
-            {!dashboardState.policy_decision ? (
-              <div className="chart-empty">
-                No policy decision available.
-              </div>
-            ) : (
-              <>
-                <div className="policy-row">
-                  <span className="policy-label">
-                    Decision
-                  </span>
+  {!dashboardState.policy_decision ? (
+    <div className="chart-empty">
+      No policy decision available.
+    </div>
+  ) : (
+    <>
+      <div className="policy-row">
+        <span className="policy-label">
+          Decision
+        </span>
 
-                  <span className="policy-value">
-                    {dashboardState.policy_decision
-                      .decision ?? "--"}
-                  </span>
-                </div>
+        <span className="policy-value">
+          {dashboardState.policy_decision.decision ?? "--"}
+        </span>
+      </div>
 
-                <div className="policy-row">
-                  <span className="policy-label">
-                    Selected target
-                  </span>
+      <div className="policy-row">
+        <span className="policy-label">
+          Selected target
+        </span>
 
-                  <span className="policy-value">
-                    {dashboardState.policy_decision
-                      .selected_target || "--"}
-                  </span>
-                </div>
+        <span className="policy-value">
+          {dashboardState.policy_decision.selected_target || "--"}
+        </span>
+      </div>
 
-                <div className="policy-row">
-                  <span className="policy-label">
-                    Reason
-                  </span>
+      <div className="policy-row">
+        <span className="policy-label">
+          Policy ID
+        </span>
 
-                  <span className="policy-value">
-                    {dashboardState.policy_decision.reason ||
-                      "--"}
-                  </span>
-                </div>
-              </>
-            )}
-          </div>
+        <span className="policy-value policy-mono">
+          {dashboardState.policy_decision.policy_id || "--"}
+        </span>
+      </div>
+
+      <div className="policy-row">
+        <span className="policy-label">
+          ERI score
+        </span>
+
+        <span className="policy-value">
+          {dashboardState.policy_decision.eri_score ?? "--"}
+        </span>
+      </div>
+
+      <div className="policy-row">
+        <span className="policy-label">
+          Max parallelism
+        </span>
+
+        <span className="policy-value">
+          {dashboardState.policy_decision.max_parallel ?? "--"}
+        </span>
+      </div>
+
+      <div className="policy-row">
+        <span className="policy-label">
+          Queue priority
+        </span>
+
+        <span className="policy-value">
+          {dashboardState.policy_decision.queue_priority ?? "--"}
+        </span>
+      </div>
+
+      <div className="policy-row">
+        <span className="policy-label">
+          Throughput limit
+        </span>
+
+        <span className="policy-value">
+          {dashboardState.policy_decision.throughput_limit ?? "--"}
+        </span>
+      </div>
+
+      <div className="policy-row">
+        <span className="policy-label">
+          Max retries
+        </span>
+
+        <span className="policy-value">
+          {dashboardState.policy_decision.max_retries ?? "--"}
+        </span>
+      </div>
+
+      <div className="policy-row">
+        <span className="policy-label">
+          Backoff
+        </span>
+
+        <span className="policy-value">
+          {dashboardState.policy_decision.backoff_strategy || "--"}
+        </span>
+      </div>
+
+      <div className="policy-row">
+        <span className="policy-label">
+          Retry delay
+        </span>
+
+        <span className="policy-value">
+          {dashboardState.policy_decision.initial_delay_seconds ?? "--"}
+          {" – "}
+          {dashboardState.policy_decision.max_delay_seconds ?? "--"}
+          {" seconds"}
+        </span>
+      </div>
+
+      <div className="policy-row">
+        <span className="policy-label">
+          Isolation
+        </span>
+
+        <span className="policy-value">
+          {dashboardState.policy_decision.isolation_action || "--"}
+        </span>
+      </div>
+
+      <div className="policy-row">
+        <span className="policy-label">
+          Reason
+        </span>
+
+        <span className="policy-value">
+          {dashboardState.policy_decision.reason || "--"}
+        </span>
+      </div>
+    </>
+  )}
+</div>
         </article>
 
         <article className="dashboard-card explanation-card">
@@ -411,38 +537,208 @@ function App() {
           </div>
 
           <div>
-            {!dashboardState.policy_explanation ? (
-              <div className="chart-empty">
-                No policy explanation available.
-              </div>
-            ) : (
-              <>
-                <h3 className="explanation-title">
-                  {dashboardState.policy_explanation
-                    .title || "Policy explanation"}
-                </h3>
+  {!dashboardState.policy_explanation ? (
+    <div className="chart-empty">
+      No policy explanation available.
+    </div>
+  ) : (
+    <>
+      <h3 className="explanation-title">
+        {dashboardState.policy_explanation.title ||
+          "Policy explanation"}
+      </h3>
 
-                {dashboardState.policy_explanation
-                  .reasons?.length ? (
-                  <ul className="explanation-list">
-                    {dashboardState.policy_explanation.reasons.map(
-                      (reason, index) => (
-                        <li
-                          key={`${reason}-${index}`}
-                        >
-                          {reason}
-                        </li>
-                      ),
-                    )}
-                  </ul>
-                ) : (
-                  <div className="chart-empty">
-                    No explanation details available.
-                  </div>
-                )}
-              </>
+      <div className="explanation-grid">
+        <div className="explanation-item">
+          <span className="explanation-label">
+            State before
+          </span>
+
+          <span className="explanation-value">
+            {dashboardState.policy_explanation.state_before ||
+              "--"}
+          </span>
+        </div>
+
+        <div className="explanation-item">
+          <span className="explanation-label">
+            State after
+          </span>
+
+          <span className="explanation-value">
+            {dashboardState.policy_explanation.state_after ||
+              "--"}
+          </span>
+        </div>
+
+        <div className="explanation-item">
+          <span className="explanation-label">
+            State changed
+          </span>
+
+          <span className="explanation-value">
+            {dashboardState.policy_explanation.state_changed
+              ? "Yes"
+              : "No"}
+          </span>
+        </div>
+
+        <div className="explanation-item">
+          <span className="explanation-label">
+            Strategy
+          </span>
+
+          <span className="explanation-value">
+            {dashboardState.policy_explanation.strategy_used ||
+              "--"}
+          </span>
+        </div>
+
+        <div className="explanation-item">
+          <span className="explanation-label">
+            Window size
+          </span>
+
+          <span className="explanation-value">
+            {dashboardState.policy_explanation.window_size ?? "--"}
+          </span>
+        </div>
+
+        <div className="explanation-item">
+          <span className="explanation-label">
+            Evaluated
+          </span>
+
+          <span className="explanation-value">
+            {formatTime(
+              dashboardState.policy_explanation.evaluated_at,
             )}
+          </span>
+        </div>
+      </div>
+
+      <div className="explanation-section">
+        <h4 className="explanation-section-title">
+          Triggered thresholds
+        </h4>
+
+        {dashboardState.policy_explanation
+          .triggered_thresholds?.length ? (
+          <ul className="explanation-list">
+            {dashboardState.policy_explanation.triggered_thresholds.map(
+              (threshold, index) => (
+                <li key={`${threshold}-${index}`}>
+                  {threshold}
+                </li>
+              ),
+            )}
+          </ul>
+        ) : (
+          <div className="explanation-empty">
+            No thresholds triggered.
           </div>
+        )}
+      </div>
+
+      <div className="explanation-section">
+        <h4 className="explanation-section-title">
+          Policy changes
+        </h4>
+
+        {dashboardState.policy_explanation
+          .policy_changes?.length ? (
+          <ul className="explanation-list">
+            {dashboardState.policy_explanation.policy_changes.map(
+              (change, index) => (
+                <li key={`${change}-${index}`}>
+                  {change}
+                </li>
+              ),
+            )}
+          </ul>
+        ) : (
+          <div className="explanation-empty">
+            No policy changes recorded.
+          </div>
+        )}
+      </div>
+
+      <div className="explanation-section">
+        <h4 className="explanation-section-title">
+          Explanation
+        </h4>
+
+        {dashboardState.policy_explanation.reasons?.length ? (
+          <ul className="explanation-list">
+            {dashboardState.policy_explanation.reasons.map(
+              (reason, index) => (
+                <li key={`${reason}-${index}`}>
+                  {reason}
+                </li>
+              ),
+            )}
+          </ul>
+        ) : (
+          <div className="explanation-empty">
+            No explanation details available.
+          </div>
+        )}
+      </div>
+
+      {Object.keys(
+        dashboardState.policy_explanation.metrics ?? {},
+      ).length > 0 && (
+        <div className="explanation-section">
+          <h4 className="explanation-section-title">
+            Metric snapshot
+          </h4>
+
+          <div className="explanation-metrics">
+            {Object.entries(
+              dashboardState.policy_explanation.metrics,
+            ).map(([name, value]) => (
+              <div className="explanation-metric" key={name}>
+                <span className="explanation-label">
+                  {name}
+                </span>
+
+                <span className="explanation-value">
+                  {Number(value).toFixed(2)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {Object.keys(
+        dashboardState.policy_explanation.thresholds ?? {},
+      ).length > 0 && (
+        <div className="explanation-section">
+          <h4 className="explanation-section-title">
+            Threshold configuration
+          </h4>
+
+          <div className="explanation-metrics">
+            {Object.entries(
+              dashboardState.policy_explanation.thresholds,
+            ).map(([name, value]) => (
+              <div className="explanation-metric" key={name}>
+                <span className="explanation-label">
+                  {name}
+                </span>
+
+                <span className="explanation-value">
+                  {Number(value).toFixed(2)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </>
+  )}
+</div>
         </article>
       </section>
     </main>
