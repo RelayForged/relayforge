@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CartesianGrid,
   Line,
@@ -71,6 +71,11 @@ function App() {
   const [dashboardState, setDashboardState] = useState(INITIAL_STATE);
   const [connectionStatus, setConnectionStatus] =
     useState("connecting");
+  const websocketRef = useRef(null);
+
+const [failureRate, setFailureRate] = useState(80);
+const [latencyMs, setLatencyMs] = useState(150);
+const [failureMode, setFailureMode] = useState("mixed");
 
   useEffect(() => {
     let websocket;
@@ -87,6 +92,7 @@ function App() {
       websocket = new WebSocket(getWebSocketUrl());
 
       websocket.onopen = () => {
+        websocketRef.current = websocket;
         setConnectionStatus("connected");
       };
 
@@ -113,6 +119,10 @@ function App() {
       };
 
       websocket.onclose = () => {
+        if (websocketRef.current === websocket) {
+          websocketRef.current = null;
+        }
+
         if (stopped) {
           return;
         }
@@ -135,8 +145,27 @@ function App() {
       if (websocket) {
         websocket.close();
       }
+
+      websocketRef.current = null;
     };
   }, []);
+
+  const applyFaultInjection = () => {
+  const websocket = websocketRef.current;
+
+  if (!websocket || websocket.readyState !== WebSocket.OPEN) {
+    return;
+  }
+
+  websocket.send(
+    JSON.stringify({
+      type: "demo_control",
+      failure_rate: failureRate / 100,
+      latency_ms: latencyMs,
+      failure_mode: failureMode,
+    }),
+  );
+};
 
   const chartData = useMemo(() => {
     return (dashboardState.eri_history ?? []).map(
@@ -247,6 +276,103 @@ function App() {
                 : "Dashboard stream unavailable."}
           </div>
         </article>
+
+        <article className="dashboard-card fault-card">
+  <div className="card-header">
+    <div>
+      <h2 className="card-title">
+        Fault Injection
+      </h2>
+
+      <p className="card-description">
+        Configure the dashboard demo telemetry
+      </p>
+    </div>
+  </div>
+
+  <div className="fault-controls">
+    <label className="fault-control">
+      <span className="fault-label">
+        Failure rate
+      </span>
+
+      <div className="fault-range-row">
+        <input
+          type="range"
+          min="0"
+          max="100"
+          step="10"
+          value={failureRate}
+          onChange={(event) =>
+            setFailureRate(Number(event.target.value))
+          }
+        />
+
+        <span className="fault-value">
+          {failureRate}%
+        </span>
+      </div>
+    </label>
+
+    <label className="fault-control">
+      <span className="fault-label">
+        Latency
+      </span>
+
+      <div className="fault-range-row">
+        <input
+          type="range"
+          min="50"
+          max="5000"
+          step="50"
+          value={latencyMs}
+          onChange={(event) =>
+            setLatencyMs(Number(event.target.value))
+          }
+        />
+
+        <span className="fault-value">
+          {latencyMs} ms
+        </span>
+      </div>
+    </label>
+
+    <label className="fault-control">
+      <span className="fault-label">
+        Failure mode
+      </span>
+
+      <select
+        className="fault-select"
+        value={failureMode}
+        onChange={(event) =>
+          setFailureMode(event.target.value)
+        }
+      >
+        <option value="mixed">
+          Mixed
+        </option>
+
+        <option value="http_500">
+          HTTP 500
+        </option>
+
+        <option value="timeout">
+          Timeout
+        </option>
+      </select>
+    </label>
+
+    <button
+      className="fault-apply"
+      type="button"
+      onClick={applyFaultInjection}
+      disabled={connectionStatus !== "connected"}
+    >
+      Apply fault profile
+    </button>
+  </div>
+</article>
 
         <article className="dashboard-card chart-card">
           <div className="card-header">

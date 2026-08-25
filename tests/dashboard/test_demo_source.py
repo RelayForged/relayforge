@@ -67,3 +67,87 @@ def test_demo_source_records_sustained_failures() -> None:
     assert len(failures) >= 15
     assert any(attempt.timed_out for attempt in failures)
     assert any(attempt.http_status == 500 for attempt in failures)
+
+def test_demo_source_accepts_fault_injection_configuration() -> None:
+    source = DashboardDemoSource(
+        failure_rate=0.5,
+        latency_ms=750.0,
+        failure_mode="timeout",
+    )
+
+    assert source.failure_rate == 0.5
+    assert source.latency_ms == 750.0
+    assert source.failure_mode == "timeout"
+
+
+def test_demo_source_rejects_invalid_fault_injection_configuration() -> None:
+    try:
+        DashboardDemoSource(failure_rate=1.5)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Expected invalid failure_rate to raise")
+
+
+def test_demo_source_rejects_unknown_failure_mode() -> None:
+    try:
+        DashboardDemoSource(failure_mode="unknown")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Expected invalid failure_mode to raise")
+
+def test_timeout_failure_mode_generates_timeouts() -> None:
+    source = DashboardDemoSource(
+        failure_rate=1.0,
+        failure_mode="timeout",
+    )
+
+    for _ in range(20):
+        source.next_evaluation()
+
+    failures = [
+        attempt
+        for attempt in source.attempts
+        if not attempt.succeeded
+    ]
+
+    assert failures
+    assert all(attempt.timed_out for attempt in failures)
+    assert all(attempt.http_status is None for attempt in failures)
+
+
+def test_http_500_failure_mode_generates_http_errors() -> None:
+    source = DashboardDemoSource(
+        failure_rate=1.0,
+        failure_mode="http_500",
+    )
+
+    for _ in range(20):
+        source.next_evaluation()
+
+    failures = [
+        attempt
+        for attempt in source.attempts
+        if not attempt.succeeded
+    ]
+
+    assert failures
+    assert all(not attempt.timed_out for attempt in failures)
+    assert all(attempt.http_status == 500 for attempt in failures)
+
+
+def test_zero_failure_rate_stays_healthy() -> None:
+    source = DashboardDemoSource(
+        failure_rate=0.0,
+        latency_ms=150.0,
+        failure_mode="timeout",
+    )
+
+    for _ in range(50):
+        source.next_evaluation()
+
+    assert len(source.attempts) == 50
+    assert all(attempt.succeeded for attempt in source.attempts)
+    assert all(not attempt.timed_out for attempt in source.attempts)
+    assert all(attempt.http_status == 200 for attempt in source.attempts)

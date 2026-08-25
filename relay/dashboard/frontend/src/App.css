@@ -108,6 +108,10 @@
   grid-column: span 4;
 }
 
+.fault-card {
+  grid-column: span 4;
+}
+
 .chart-card {
   grid-column: span 8;
 }
@@ -223,10 +227,9 @@
 }
 
 .timeline-event {
-  display: grid;
-  grid-template-columns: 72px 1fr;
-  gap: 12px;
-  align-items: start;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   padding: 12px;
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -243,16 +246,6 @@
   color: var(--text-primary);
   font-size: 13px;
   font-weight: 650;
-}
-
-.timeline-event {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface-muted);
 }
 
 .timeline-main {
@@ -327,16 +320,13 @@
   color: var(--text-primary);
   font-size: 14px;
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 .policy-mono {
   font-family: var(--mono);
   font-size: 12px;
   word-break: break-all;
-}
-
-.policy-value {
-  overflow-wrap: anywhere;
 }
 
 .explanation-title {
@@ -437,6 +427,74 @@
   background: var(--surface-muted);
 }
 
+.fault-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.fault-control {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fault-label {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.fault-range-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.fault-range-row input[type="range"] {
+  flex: 1;
+}
+
+.fault-value {
+  min-width: 64px;
+  color: var(--text-secondary);
+  font-family: var(--mono);
+  font-size: 12px;
+  text-align: right;
+}
+
+.fault-select {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.fault-apply {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--text-primary);
+  color: var(--surface);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.fault-apply:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.fault-apply:not(:disabled):hover {
+  opacity: 0.9;
+}
+
 @media (max-width: 600px) {
   .explanation-grid,
   .explanation-metrics {
@@ -452,6 +510,7 @@
   .state-card,
   .eri-card,
   .stream-card,
+  .fault-card,
   .chart-card,
   .timeline-card,
   .policy-card,
@@ -483,8 +542,8 @@
   }
 
   .timeline-main {
-  align-items: flex-start;
-  flex-direction: column;
-  gap: 4px;
-}
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
 }

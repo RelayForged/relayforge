@@ -26,8 +26,29 @@ class DashboardDemoSource:
             -> DeliveryPolicy + ExplainabilityRecord
     """
 
-    def __init__(self, endpoint_id: str = "dashboard-demo-endpoint") -> None:
+    def __init__(
+        self,
+        endpoint_id: str = "dashboard-demo-endpoint",
+        failure_rate: float = 0.8,
+        latency_ms: float = 150.0,
+        failure_mode: str = "mixed",
+    ) -> None:
+        if not 0.0 <= failure_rate <= 1.0:
+            raise ValueError("failure_rate must be between 0.0 and 1.0")
+
+        if latency_ms <= 0:
+            raise ValueError("latency_ms must be greater than 0")
+
+        if failure_mode not in {"mixed", "http_500", "timeout"}:
+            raise ValueError(
+                "failure_mode must be one of: mixed, http_500, timeout"
+            )
+
         self.endpoint_id = endpoint_id
+        self.failure_rate = failure_rate
+        self.latency_ms = latency_ms
+        self.failure_mode = failure_mode
+
         self.state = EndpointState.AVAILABLE
         self.attempt_number = 0
 
@@ -45,45 +66,109 @@ class DashboardDemoSource:
 
         self.strategy = StrategyC()
 
+    def configure(
+        self,
+        *,
+        failure_rate: float | None = None,
+        latency_ms: float | None = None,
+        failure_mode: str | None = None,
+    ) -> None:
+        """
+        Update dashboard demo fault-injection settings.
+
+        This is intentionally dashboard-owned configuration. It does not
+        modify the ERI calculation or Strategy C behavior.
+        """
+        if failure_rate is not None:
+            if not 0.0 <= failure_rate <= 1.0:
+                raise ValueError(
+                    "failure_rate must be between 0.0 and 1.0"
+                )
+            self.failure_rate = failure_rate
+
+        if latency_ms is not None:
+            if latency_ms <= 0:
+                raise ValueError(
+                    "latency_ms must be greater than 0"
+                )
+            self.latency_ms = latency_ms
+
+        if failure_mode is not None:
+            if failure_mode not in {
+                "mixed",
+                "http_500",
+                "timeout",
+            }:
+                raise ValueError(
+                    "failure_mode must be one of: "
+                    "mixed, http_500, timeout"
+                )
+
+            self.failure_mode = failure_mode
+
     def _make_attempt(self) -> Telemetry:
         self.attempt_number += 1
 
-        # Phase 1: healthy operation.
-        if self.attempt_number <= 10:
+        # A zero failure rate means the demo remains healthy indefinitely.
+        # This is important for testing recovery/stable operation.
+        if self.failure_rate == 0.0:
             succeeded = True
             timed_out = False
-            latency_ms = 150.0
+            latency_ms = self.latency_ms
             http_status = 200
 
-        # Phase 2: sustained degradation.
-        # Four out of every five attempts fail.
+        # Phase 1: healthy startup.
+        # Give Strategy C a healthy baseline before fault injection begins.
+        elif self.attempt_number <= 10:
+            succeeded = True
+            timed_out = False
+            latency_ms = self.latency_ms
+            http_status = 200
+
+        # Phase 2: configurable degradation.
         elif self.attempt_number <= 30:
-            failure = self.attempt_number % 5 != 0
+            failure = (
+                (self.attempt_number % 10) / 10
+            ) < self.failure_rate
 
             if not failure:
                 succeeded = True
                 timed_out = False
-                latency_ms = 150.0
+                latency_ms = self.latency_ms
                 http_status = 200
 
-            elif self.attempt_number % 2 == 0:
+            elif self.failure_mode == "timeout":
                 succeeded = False
                 timed_out = True
-                latency_ms = 3000.0
+                latency_ms = max(self.latency_ms, 3000.0)
                 http_status = None
 
-            else:
+            elif self.failure_mode == "http_500":
                 succeeded = False
                 timed_out = False
-                latency_ms = 1800.0
+                latency_ms = max(self.latency_ms, 1800.0)
                 http_status = 500
 
+            else:
+                # Mixed mode alternates between timeout and HTTP 500.
+                if self.attempt_number % 2 == 0:
+                    succeeded = False
+                    timed_out = True
+                    latency_ms = max(self.latency_ms, 3000.0)
+                    http_status = None
+                else:
+                    succeeded = False
+                    timed_out = False
+                    latency_ms = max(self.latency_ms, 1800.0)
+                    http_status = 500
+
         # Phase 3: severe outage.
-        # Sustained timeouts drive ERI below the quarantine threshold.
+        # Keep this phase so the default dashboard demo can demonstrate
+        # the full Strategy C state progression.
         else:
             succeeded = False
             timed_out = True
-            latency_ms = 3000.0
+            latency_ms = max(self.latency_ms, 3000.0)
             http_status = None
 
         return Telemetry(
