@@ -7,7 +7,7 @@ schedule retries, compute backoff, or select a strategy.
 """
 from datetime import datetime, timezone
 from time import perf_counter
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 import httpx
 
@@ -15,8 +15,12 @@ from relay.infrastructure.persistence.delivery_attempt_repository import (
     DeliveryAttemptRepository,
 )
 from relay.infrastructure.persistence.telemetry_repository import TelemetryRepository
-from relay.kernel.entities.delivery import DeliveryAttempt
+from relay.kernel.entities.delivery import Delivery, DeliveryAttempt
+from relay.kernel.policies.delivery_policy import DeliveryPolicy
 from relay.kernel.value_objects.telemetry import Telemetry
+
+if TYPE_CHECKING:
+    from relay.data_plane.retry_manager.manager import RetryManager
 
 DEFAULT_TIMEOUT_SECONDS = 5.0
 
@@ -29,17 +33,22 @@ class WebhookWorker:
         attempts: Optional[DeliveryAttemptRepository] = None,
         telemetry: Optional[TelemetryRepository] = None,
         client: Optional[httpx.AsyncClient] = None,
+        retry_manager: Optional["RetryManager"] = None,
     ) -> None:
         self._timeout = httpx.Timeout(timeout_seconds)
         self._attempts = attempts or DeliveryAttemptRepository()
         self._telemetry = telemetry or TelemetryRepository()
         self._client = client
+        self._retry_manager = retry_manager
 
     async def execute(
         self,
         attempt: DeliveryAttempt,
         target_url: str,
         endpoint_id: str,
+        *,
+        delivery: Optional[Delivery] = None,
+        policy: Optional[DeliveryPolicy] = None,
     ) -> tuple[DeliveryAttempt, Telemetry]:
         """
         POST once, then persist completed attempt + Telemetry.
@@ -90,6 +99,12 @@ class WebhookWorker:
             observed_at=completed_at,
         )
         await self._telemetry.save(observation)
+        if (
+            self._retry_manager is not None
+            and delivery is not None
+            and policy is not None
+        ):
+            await self._retry_manager.handle(completed, delivery, policy)
         return completed, observation
 
     async def _post(self, target_url: str) -> httpx.Response:

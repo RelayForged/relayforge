@@ -1,13 +1,9 @@
 """
 Kafka Dispatcher — data plane consumer process.
 
-Reads `events.business`, fans out one Delivery per ACTIVE subscription,
-persists Delivery + initial DeliveryAttempt, then hands work to the
-worker queue. Never imports aiokafka. Never HTTP. Never commits a Kafka
-offset until Postgres has accepted the rows (ADR 0001 / 0002).
-
-Week 3–4: Strategy A only. Isolation PAUSE / QUARANTINE skips the worker
-handoff; rows stay durable.
+Reads `events.business` (ingest) and `events.internal.delivery` (retries).
+Persist-first: Kafka offset is committed after Postgres, never after HTTP.
+Never imports aiokafka. Week 3–4: Strategy A only.
 
 Run:
     .venv/bin/python -m relay.data_plane.dispatcher.main
@@ -16,12 +12,15 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Awaitable, Callable, Optional
+from typing import Optional
 
 from relay.control_plane.aede.strategies.static import StrategyA
+from relay.data_plane.retry_manager.manager import RetryManager, RetryWork
+from relay.data_plane.workers.webhook import WebhookWorker
 from relay.infrastructure.feature_flags import FeatureFlags
 from relay.infrastructure.messaging.consumer import (
     EVENTS_BUSINESS_TOPIC,
+    EVENTS_INTERNAL_DELIVERY_TOPIC,
     KafkaConsumer,
     KafkaMessage,
 )
@@ -29,6 +28,7 @@ from relay.infrastructure.persistence.delivery_attempt_repository import (
     DeliveryAttemptRepository,
 )
 from relay.infrastructure.persistence.delivery_repository import DeliveryRepository
+from relay.infrastructure.persistence.endpoint_repository import EndpointRepository
 from relay.infrastructure.persistence.subscription_repository import (
     SubscriptionRepository,
 )
@@ -43,13 +43,6 @@ DISPATCHER_GROUP_ID = "relay-dispatcher"
 
 _SKIP_HTTP = frozenset({IsolationAction.PAUSE, IsolationAction.QUARANTINE})
 
-WorkerEnqueue = Callable[[DeliveryAttempt, DeliveryPolicy], Awaitable[None]]
-
-
-async def enqueue_worker(attempt: DeliveryAttempt, policy: DeliveryPolicy) -> None:
-    """In-memory handoff. Worker HTTP is Phase 4."""
-    return None
-
 
 class Dispatcher:
     def __init__(
@@ -59,21 +52,28 @@ class Dispatcher:
         subscriptions: Optional[SubscriptionRepository] = None,
         deliveries: Optional[DeliveryRepository] = None,
         attempts: Optional[DeliveryAttemptRepository] = None,
-        enqueue: WorkerEnqueue = enqueue_worker,
-        worker_queue: Optional[asyncio.Queue[tuple[DeliveryAttempt, DeliveryPolicy]]] = None,
+        endpoints: Optional[EndpointRepository] = None,
+        worker: Optional[WebhookWorker] = None,
+        retry_manager: Optional[RetryManager] = None,
     ) -> None:
         self._consumer = consumer or KafkaConsumer(
-            topics=(EVENTS_BUSINESS_TOPIC,),
+            topics=(EVENTS_BUSINESS_TOPIC, EVENTS_INTERNAL_DELIVERY_TOPIC),
             group_id=DISPATCHER_GROUP_ID,
         )
         self._subscriptions = subscriptions or SubscriptionRepository()
         self._deliveries = deliveries or DeliveryRepository()
         self._attempts = attempts or DeliveryAttemptRepository()
-        self._enqueue = enqueue
-        self.worker_queue: asyncio.Queue[tuple[DeliveryAttempt, DeliveryPolicy]] = (
-            worker_queue if worker_queue is not None else asyncio.Queue()
+        self._endpoints = endpoints or EndpointRepository()
+        retries = retry_manager or RetryManager(
+            deliveries=self._deliveries,
+            attempts=self._attempts,
         )
-        # Week 3–4: always Strategy A (STATIC_RETRY_MODE / construct directly).
+        self._retry_manager = retries
+        self._worker = worker or WebhookWorker(
+            attempts=self._attempts,
+            retry_manager=retries,
+        )
+        self._scheduled: set[asyncio.Task[None]] = set()
         self._flags = FeatureFlags.from_env()
         self._strategy = StrategyA()
 
@@ -86,9 +86,25 @@ class Dispatcher:
             await self._consumer.close()
 
     async def handle_message(self, message: KafkaMessage) -> None:
+        if message.topic == EVENTS_INTERNAL_DELIVERY_TOPIC:
+            await self.handle_retry(message)
+            return
         event = Event.model_validate_json(message.value)
         await self._fan_out(event)
         await self._consumer.commit(message)
+
+    async def handle_retry(self, message: KafkaMessage) -> None:
+        work = RetryWork.model_validate_json(message.value)
+        await self._consumer.commit(message)
+        task = asyncio.create_task(self._run_scheduled(work))
+        self._scheduled.add(task)
+        task.add_done_callback(self._scheduled.discard)
+
+    async def _run_scheduled(self, work: RetryWork) -> None:
+        delay = (work.next_attempt_at - datetime.now(timezone.utc)).total_seconds()
+        if delay > 0:
+            await asyncio.sleep(delay)
+        await self._execute_attempt(work.attempt, work.delivery, work.policy)
 
     async def _fan_out(self, event: Event) -> None:
         subscriptions = await self._subscriptions.list_active_by_event_type(
@@ -117,8 +133,24 @@ class Dispatcher:
         if policy.isolation_policy.action in _SKIP_HTTP:
             return
 
-        await self.worker_queue.put((attempt, policy))
-        await self._enqueue(attempt, policy)
+        await self._execute_attempt(attempt, delivery, policy)
+
+    async def _execute_attempt(
+        self,
+        attempt: DeliveryAttempt,
+        delivery: Delivery,
+        policy: DeliveryPolicy,
+    ) -> None:
+        endpoint = await self._endpoints.get_by_id(delivery.endpoint_id)
+        if endpoint is None:
+            return
+        await self._worker.execute(
+            attempt,
+            endpoint.target_url,
+            delivery.endpoint_id,
+            delivery=delivery,
+            policy=policy,
+        )
 
     async def _persist_initial(
         self,
