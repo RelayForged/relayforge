@@ -71,3 +71,27 @@ class DeliveryRepository:
             created_at=row.created_at,
             status=row.status,
         )
+
+    async def get_by_event_and_subscription(
+        self, event_id: str, subscription_id: str
+    ) -> Optional[Delivery]:
+        """The canonical Delivery for a fan-out target, if one exists."""
+        stmt = select(deliveries_table).where(
+            deliveries_table.c.event_id == event_id,
+            deliveries_table.c.subscription_id == subscription_id,
+        )
+        async with self._engine.connect() as conn:
+            result = await conn.execute(stmt)
+            row = result.fetchone()
+
+        if row is None:
+            return None
+
+        return Delivery(
+            delivery_id=row.delivery_id,
+            event_id=row.event_id,
+            subscription_id=row.subscription_id,
+            endpoint_id=row.endpoint_id,
+            created_at=row.created_at,
+            status=row.status,
+        )
