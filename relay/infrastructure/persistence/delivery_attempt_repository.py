@@ -1,10 +1,9 @@
 """
 Repository for the `DeliveryAttempt` entity.
 
-Append-only: only `save()` (INSERT) and reads exist. There is no update
-method, mirroring the DB-level trigger from ADR 0014 — a DeliveryAttempt
-row is never mutated. Each retry is a new row with a new attempt_id and
-incrementing attempt_number.
+Retries are new rows (new attempt_id / attempt_number). DELETE is
+forbidden at the DB (ADR 0014). Completing an in-flight attempt is a
+sanctioned UPDATE of outcome columns only, via model_copy + save().
 """
 from typing import Optional
 
@@ -23,24 +22,30 @@ class DeliveryAttemptRepository:
 
     async def save(self, attempt: DeliveryAttempt) -> None:
         """
-        Persist a DeliveryAttempt. Idempotent on `attempt_id`: a repeat
-        save (e.g. worker retry after a crash post-insert) is a no-op
-        rather than raising a unique-violation or mutating the existing
-        row (ADR 0002, ADR 0014).
+        Persist a DeliveryAttempt. Insert if new. If the same `attempt_id`
+        already exists (Dispatcher persist-first row) and `completed_at`
+        is still null, fill in outcome columns from the Worker's
+        model_copy. Identity fields and a completed row are never rewritten.
         """
-        stmt = (
-            pg_insert(delivery_attempts_table)
-            .values(
-                attempt_id=attempt.attempt_id,
-                delivery_id=attempt.delivery_id,
-                attempt_number=attempt.attempt_number,
-                started_at=attempt.started_at,
-                completed_at=attempt.completed_at,
-                http_status=attempt.http_status,
-                success=attempt.success,
-                error_message=attempt.error_message,
-            )
-            .on_conflict_do_nothing(index_elements=["attempt_id"])
+        stmt = pg_insert(delivery_attempts_table).values(
+            attempt_id=attempt.attempt_id,
+            delivery_id=attempt.delivery_id,
+            attempt_number=attempt.attempt_number,
+            started_at=attempt.started_at,
+            completed_at=attempt.completed_at,
+            http_status=attempt.http_status,
+            success=attempt.success,
+            error_message=attempt.error_message,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["attempt_id"],
+            set_={
+                "completed_at": stmt.excluded.completed_at,
+                "http_status": stmt.excluded.http_status,
+                "success": stmt.excluded.success,
+                "error_message": stmt.excluded.error_message,
+            },
+            where=delivery_attempts_table.c.completed_at.is_(None),
         )
         async with self._engine.begin() as conn:
             await conn.execute(stmt)
