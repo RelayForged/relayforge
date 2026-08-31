@@ -63,3 +63,29 @@ class SubscriptionRepository:
             created_at=row.created_at,
             status=row.status,
         )
+
+    async def list_active_by_event_type(self, event_type: str) -> list[Subscription]:
+        """
+        ACTIVE subscriptions whose `event_types` array contains `event_type`.
+        Used by the Dispatcher to fan out one Event to N deliveries.
+        """
+        stmt = (
+            select(subscriptions_table)
+            .where(subscriptions_table.c.status == "ACTIVE")
+            .where(subscriptions_table.c.event_types.contains([event_type]))
+            .order_by(subscriptions_table.c.created_at)
+        )
+        async with self._engine.connect() as conn:
+            result = await conn.execute(stmt)
+            rows = result.fetchall()
+
+        return [
+            Subscription(
+                subscription_id=row.subscription_id,
+                endpoint_id=row.endpoint_id,
+                event_types=list(row.event_types),
+                created_at=row.created_at,
+                status=row.status,
+            )
+            for row in rows
+        ]
