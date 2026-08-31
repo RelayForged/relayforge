@@ -14,6 +14,10 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Optional
 
+import logging
+
+from pydantic import ValidationError
+
 from relay.control_plane.aede.strategies.static import StrategyA
 from relay.data_plane.retry_manager.manager import RetryManager, RetryWork
 from relay.data_plane.workers.webhook import WebhookWorker
@@ -40,6 +44,7 @@ from relay.kernel.value_objects.endpoint_state import EndpointState
 from relay.kernel.value_objects.eri import ERIScore
 
 DISPATCHER_GROUP_ID = "relay-dispatcher"
+logger = logging.getLogger(__name__)
 
 _SKIP_HTTP = frozenset({IsolationAction.PAUSE, IsolationAction.QUARANTINE})
 
@@ -86,12 +91,21 @@ class Dispatcher:
             await self._consumer.close()
 
     async def handle_message(self, message: KafkaMessage) -> None:
-        if message.topic == EVENTS_INTERNAL_DELIVERY_TOPIC:
-            await self.handle_retry(message)
-            return
-        event = Event.model_validate_json(message.value)
-        await self._fan_out(event)
-        await self._consumer.commit(message)
+        try:
+            if message.topic == EVENTS_INTERNAL_DELIVERY_TOPIC:
+                await self.handle_retry(message)
+                return
+            event = Event.model_validate_json(message.value)
+            await self._fan_out(event)
+            await self._consumer.commit(message)
+        except ValidationError:
+            logger.warning(
+                "Skipping invalid Kafka payload topic=%s partition=%s offset=%s",
+                message.topic,
+                message.partition,
+                message.offset,
+            )
+            await self._consumer.commit(message)
 
     async def handle_retry(self, message: KafkaMessage) -> None:
         work = RetryWork.model_validate_json(message.value)

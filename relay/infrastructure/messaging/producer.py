@@ -11,6 +11,7 @@ from typing import Optional
 
 from aiokafka import AIOKafkaProducer
 
+from relay.infrastructure.messaging.admin import ensure_topics
 from relay.infrastructure.messaging.config import get_kafka_bootstrap_servers
 
 EVENTS_BUSINESS_TOPIC = "events.business"
@@ -22,6 +23,7 @@ async def _get_producer() -> AIOKafkaProducer:
     """Lazily start the process-wide producer on first use."""
     global _producer
     if _producer is None:
+        await ensure_topics()
         _producer = AIOKafkaProducer(bootstrap_servers=get_kafka_bootstrap_servers())
         await _producer.start()
     return _producer

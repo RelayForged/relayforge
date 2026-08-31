@@ -12,6 +12,7 @@ from typing import AsyncIterator, Optional, Sequence
 
 from aiokafka import AIOKafkaConsumer, TopicPartition
 
+from relay.infrastructure.messaging.admin import ensure_topics
 from relay.infrastructure.messaging.config import get_kafka_bootstrap_servers
 
 EVENTS_BUSINESS_TOPIC = "events.business"
@@ -50,6 +51,7 @@ class KafkaConsumer:
     async def start(self) -> None:
         if self._consumer is not None:
             return
+        await ensure_topics()
         consumer = AIOKafkaConsumer(
             *self._topics,
             bootstrap_servers=self._bootstrap_servers,

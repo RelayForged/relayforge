@@ -11,11 +11,13 @@ from fastapi import FastAPI
 from relay.api.endpoints import router as endpoints_router
 from relay.api.events import router as events_router
 from relay.api.subscriptions import router as subscriptions_router
+from relay.infrastructure.messaging.admin import ensure_topics
 from relay.infrastructure.messaging.producer import close as close_producer
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    await ensure_topics()
     yield
     await close_producer()
 

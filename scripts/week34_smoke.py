@@ -24,6 +24,7 @@ from typing import Optional
 import httpx
 
 from relay.data_plane.dispatcher.main import Dispatcher
+from relay.infrastructure.messaging.admin import ensure_topics
 from relay.infrastructure.messaging.consumer import (
     EVENTS_BUSINESS_TOPIC,
     EVENTS_INTERNAL_DELIVERY_TOPIC,
@@ -183,6 +184,7 @@ async def main() -> None:
     dispatcher_task: Optional[asyncio.Task[None]] = None
     async with httpx.AsyncClient(timeout=5.0) as client:
         try:
+            await ensure_topics()
             sim_proc = await _configure_simulator(client)
 
             endpoint = Endpoint(
@@ -206,7 +208,7 @@ async def main() -> None:
                 )
             )
             dispatcher_task = asyncio.create_task(dispatcher.run())
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(2.0)
 
             correlation_id = CorrelationID()
             event = Event(

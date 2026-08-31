@@ -8,7 +8,6 @@ model is the frozen Pydantic `Event` in relay/kernel/entities/event.py
 `infrastructure/persistence/` should import from this module.
 """
 from sqlalchemy import (
-    ARRAY,
     Boolean,
     Column,
     Float,
@@ -20,7 +19,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TIMESTAMP, UUID
 
 metadata = MetaData()
 
