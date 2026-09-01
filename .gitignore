@@ -167,6 +167,7 @@ CLAUDE.md
 .agents/
 .gemini/
 
-#Cursor Configuration
+# Cursor configuration and rules — local only, never commit
 .cursor/
+.cursor/rules/
 *.mdc
