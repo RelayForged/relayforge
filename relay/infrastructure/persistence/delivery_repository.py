@@ -13,7 +13,7 @@ see ADR 0014).
 """
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import Row, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -22,11 +22,22 @@ from relay.infrastructure.persistence.models import deliveries_table
 from relay.kernel.entities.delivery import Delivery
 
 
+def _to_delivery(row: Row) -> Delivery:
+    return Delivery(
+        delivery_id=row.delivery_id,
+        event_id=row.event_id,
+        subscription_id=row.subscription_id,
+        endpoint_id=row.endpoint_id,
+        created_at=row.created_at,
+        status=row.status,
+    )
+
+
 class DeliveryRepository:
     def __init__(self, engine: Optional[AsyncEngine] = None) -> None:
         self._engine = engine or get_engine()
 
-    async def save(self, delivery: Delivery) -> None:
+    async def save(self, delivery: Delivery) -> Optional[Delivery]:
         """
         Persist a Delivery. Idempotent on (event_id, subscription_id):
         a second insert for the same pair with a different delivery_id is
@@ -34,6 +45,11 @@ class DeliveryRepository:
         is updated so Retry Manager can mark SUCCESS / FAILED / DEAD_LETTER
         via model_copy + re-save. created_at and identity FKs are never
         overwritten.
+
+        Returns the row as written, or None when the upsert was a
+        deliberate no-op (the canonical row has a different delivery_id).
+        RETURNING removes the read-back the Dispatcher used to issue on
+        every single fan-out target.
         """
         stmt = pg_insert(deliveries_table).values(
             delivery_id=delivery.delivery_id,
@@ -47,9 +63,12 @@ class DeliveryRepository:
             index_elements=["event_id", "subscription_id"],
             set_={"status": stmt.excluded.status},
             where=deliveries_table.c.delivery_id == stmt.excluded.delivery_id,
-        )
+        ).returning(deliveries_table)
         async with self._engine.begin() as conn:
-            await conn.execute(stmt)
+            result = await conn.execute(stmt)
+            row = result.fetchone()
+
+        return _to_delivery(row) if row is not None else None
 
     async def get_by_id(self, delivery_id: str) -> Optional[Delivery]:
         """Load a single Delivery by its ID. Returns None if it does not exist."""
@@ -60,17 +79,7 @@ class DeliveryRepository:
             result = await conn.execute(stmt)
             row = result.fetchone()
 
-        if row is None:
-            return None
-
-        return Delivery(
-            delivery_id=row.delivery_id,
-            event_id=row.event_id,
-            subscription_id=row.subscription_id,
-            endpoint_id=row.endpoint_id,
-            created_at=row.created_at,
-            status=row.status,
-        )
+        return _to_delivery(row) if row is not None else None
 
     async def get_by_event_and_subscription(
         self, event_id: str, subscription_id: str
@@ -84,14 +93,4 @@ class DeliveryRepository:
             result = await conn.execute(stmt)
             row = result.fetchone()
 
-        if row is None:
-            return None
-
-        return Delivery(
-            delivery_id=row.delivery_id,
-            event_id=row.event_id,
-            subscription_id=row.subscription_id,
-            endpoint_id=row.endpoint_id,
-            created_at=row.created_at,
-            status=row.status,
-        )
+        return _to_delivery(row) if row is not None else None

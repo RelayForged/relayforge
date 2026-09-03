@@ -17,7 +17,24 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "httpx>=0.27",
+    # relay/infrastructure/config_loader.py imports yaml; it was never declared.
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+# Test-only. Install with: pip install -e ".[dev]"
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
 ]
 
 [tool.setuptools.packages.find]
 include = ["relay*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The data-plane suite is async throughout; "auto" avoids an
+# @pytest.mark.asyncio on every test. No existing test is async, so this
+# changes nothing for the kernel / control-plane / dashboard suites.
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

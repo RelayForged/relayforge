@@ -1,6 +1,8 @@
 # ADR 0014: Enforce DeliveryAttempt and Telemetry Immutability with a Database Trigger
 
-**Status:** Accepted
+**Status:** Accepted — amended by ADR 0019
+
+**Amendment note:** the enforcement mechanism for `delivery_attempts` described below (`BEFORE UPDATE OR DELETE`, and Attempt `save()` using `ON CONFLICT DO NOTHING`) was changed twice: revision `6b999f7451a9` dropped UPDATE to allow persist-first completion, and revision `b7c41de9a052` replaced it with a completion-only UPDATE trigger. See ADR 0019 for the current rule. The intent stated here — attempt history and ERI observations are immutable facts, `deliveries` is a mutable lifecycle aggregate — is unchanged.
 
 **Context**
 

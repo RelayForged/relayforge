@@ -21,6 +21,11 @@ import time
 import uuid
 from typing import Optional
 
+# The Simulator lives on 127.0.0.1, which the Worker's SSRF egress guard
+# blocks by default (relay/infrastructure/url_guard.py). Set before the
+# relay imports so the guard reads it. Local smoke only.
+os.environ.setdefault("RELAY_ALLOW_PRIVATE_TARGETS", "true")
+
 import httpx
 
 from relay.data_plane.dispatcher.main import Dispatcher
