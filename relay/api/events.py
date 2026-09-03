@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from relay.api.deps import get_event_repository
 from relay.api.schemas import IngestEventRequest, IngestEventResponse
+from relay.api.security import require_owner
 from relay.infrastructure.messaging.producer import EVENTS_BUSINESS_TOPIC, publish
 from relay.infrastructure.persistence.event_repository import EventRepository
 from relay.kernel.entities.event import Event
@@ -25,6 +26,7 @@ router = APIRouter(tags=["events"])
 )
 async def ingest_event(
     body: IngestEventRequest,
+    _owner_id: str = Depends(require_owner),
     repo: EventRepository = Depends(get_event_repository),
 ) -> IngestEventResponse:
     correlation_id = CorrelationID()
@@ -58,6 +60,7 @@ async def ingest_event(
 @router.get("/events/{event_id}")
 async def get_event(
     event_id: str,
+    _owner_id: str = Depends(require_owner),
     repo: EventRepository = Depends(get_event_repository),
 ) -> Event:
     event = await repo.get_by_id(event_id)

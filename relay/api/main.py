@@ -10,6 +10,7 @@ from fastapi import FastAPI
 
 from relay.api.endpoints import router as endpoints_router
 from relay.api.events import router as events_router
+from relay.api.middleware import BodySizeLimitMiddleware
 from relay.api.subscriptions import router as subscriptions_router
 from relay.infrastructure.messaging.admin import ensure_topics
 from relay.infrastructure.messaging.producer import close as close_producer
@@ -27,6 +28,9 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+app.add_middleware(BodySizeLimitMiddleware)
+
 app.include_router(events_router)
 app.include_router(endpoints_router)
 app.include_router(subscriptions_router)

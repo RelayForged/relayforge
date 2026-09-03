@@ -19,6 +19,7 @@ from relay.infrastructure.persistence.delivery_attempt_repository import (
 )
 from relay.infrastructure.persistence.delivery_repository import DeliveryRepository
 from relay.kernel.entities.delivery import Delivery, DeliveryAttempt
+from relay.kernel.entities.event import Event
 from relay.kernel.policies.delivery_policy import (
     DeliveryPolicy,
     IsolationAction,
@@ -29,7 +30,13 @@ _SKIP_HTTP = frozenset({IsolationAction.PAUSE, IsolationAction.QUARANTINE})
 
 
 class RetryWork(BaseModel):
-    """Kafka payload for `events.internal.delivery`. Not a kernel type."""
+    """
+    Kafka payload for `events.internal.delivery`. Not a kernel type.
+
+    Carries the Event because the retry POST must reproduce the exact
+    same request body as the first attempt, and the Dispatcher consuming
+    this message has no other handle on it.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -37,6 +44,7 @@ class RetryWork(BaseModel):
     attempt: DeliveryAttempt
     delivery: Delivery
     policy: DeliveryPolicy
+    event: Event
 
 
 def exponential_delay_seconds(
@@ -46,6 +54,10 @@ def exponential_delay_seconds(
         retry_policy.backoff_multiplier ** (failed_attempt_number - 1)
     )
     return min(delay, retry_policy.max_delay_seconds)
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
 class RetryManager:
@@ -63,6 +75,7 @@ class RetryManager:
         completed: DeliveryAttempt,
         delivery: Delivery,
         policy: DeliveryPolicy,
+        event: Event,
     ) -> Optional[RetryWork]:
         """
         After a worker attempt: SUCCESS, schedule a retry, or mark FAILED.
@@ -79,38 +92,59 @@ class RetryManager:
             await self._set_status(delivery, "FAILED")
             return None
 
-        return await self._schedule(completed, delivery, policy)
-
-    async def _schedule(
-        self,
-        completed: DeliveryAttempt,
-        delivery: Delivery,
-        policy: DeliveryPolicy,
-    ) -> RetryWork:
-        next_number = completed.attempt_number + 1
-        existing = await self._attempts.list_by_delivery_id(delivery.delivery_id)
-        already = next((row for row in existing if row.attempt_number == next_number), None)
         now = datetime.now(timezone.utc)
         delay = exponential_delay_seconds(
             policy.retry_policy, completed.attempt_number
         )
         next_attempt_at = now + timedelta(seconds=delay)
 
-        if already is None:
-            next_attempt = DeliveryAttempt(
-                delivery_id=delivery.delivery_id,
-                attempt_number=next_number,
-                started_at=next_attempt_at,
+        # deadline_seconds is an absolute budget across all retries and
+        # overrides max_retries when it expires first.
+        deadline_seconds = policy.retry_policy.deadline_seconds
+        if deadline_seconds is not None:
+            expires_at = _as_utc(delivery.created_at) + timedelta(
+                seconds=deadline_seconds
             )
-            await self._attempts.save(next_attempt)
-        else:
-            next_attempt = already
+            if next_attempt_at > expires_at:
+                await self._set_status(delivery, "FAILED")
+                return None
+
+        return await self._schedule(
+            completed, delivery, policy, event, next_attempt_at
+        )
+
+    async def _schedule(
+        self,
+        completed: DeliveryAttempt,
+        delivery: Delivery,
+        policy: DeliveryPolicy,
+        event: Event,
+        next_attempt_at: datetime,
+    ) -> Optional[RetryWork]:
+        next_number = completed.attempt_number + 1
+        candidate = DeliveryAttempt(
+            delivery_id=delivery.delivery_id,
+            attempt_number=next_number,
+            started_at=next_attempt_at,
+        )
+        next_attempt = await self._attempts.insert_if_absent(candidate)
+        if next_attempt is None:
+            # A redelivery of the same failed attempt already claimed this
+            # slot. Reuse it if it is still in flight; stand down if it
+            # already ran, so the same retry is not executed twice.
+            existing = await self._attempts.get_by_delivery_and_number(
+                delivery.delivery_id, next_number
+            )
+            if existing is None or existing.completed_at is not None:
+                return None
+            next_attempt = existing
 
         work = RetryWork(
             next_attempt_at=next_attempt_at,
             attempt=next_attempt,
             delivery=delivery,
             policy=policy,
+            event=event,
         )
         await publish(
             EVENTS_INTERNAL_DELIVERY_TOPIC,

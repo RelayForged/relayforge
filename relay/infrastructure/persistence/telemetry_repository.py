@@ -19,6 +19,10 @@ from relay.infrastructure.persistence.engine import get_engine
 from relay.infrastructure.persistence.models import telemetry_table
 from relay.kernel.value_objects.telemetry import Telemetry
 
+# Default trailing window for list_by_endpoint_id. Callers that need a
+# different span pass `limit` explicitly.
+DEFAULT_WINDOW_SIZE = 100
+
 
 class TelemetryRepository:
     def __init__(self, engine: Optional[AsyncEngine] = None) -> None:
@@ -68,12 +72,23 @@ class TelemetryRepository:
             observed_at=row.observed_at,
         )
 
-    async def list_by_endpoint_id(self, endpoint_id: str) -> list[Telemetry]:
-        """All observations for an endpoint, ordered by observed_at (ERI window)."""
+    async def list_by_endpoint_id(
+        self, endpoint_id: str, *, limit: int = DEFAULT_WINDOW_SIZE
+    ) -> list[Telemetry]:
+        """
+        The most recent `limit` observations for an endpoint, returned
+        oldest-first (the ERI window).
+
+        `telemetry` is append-only and grows once per delivery attempt
+        forever, so this is bounded by design: an unbounded variant would
+        materialize an endpoint's entire history and build one Pydantic
+        object per row. ERI only ever needs the trailing window.
+        """
         stmt = (
             select(telemetry_table)
             .where(telemetry_table.c.endpoint_id == endpoint_id)
-            .order_by(telemetry_table.c.observed_at)
+            .order_by(telemetry_table.c.observed_at.desc())
+            .limit(limit)
         )
         async with self._engine.connect() as conn:
             result = await conn.execute(stmt)
@@ -89,5 +104,5 @@ class TelemetryRepository:
                 timed_out=row.timed_out,
                 observed_at=row.observed_at,
             )
-            for row in rows
+            for row in reversed(rows)
         ]

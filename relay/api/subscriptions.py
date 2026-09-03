@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 
 from relay.api.deps import get_endpoint_repository, get_subscription_repository
 from relay.api.schemas import CreateSubscriptionRequest
+from relay.api.security import require_owner
 from relay.infrastructure.persistence.endpoint_repository import EndpointRepository
 from relay.infrastructure.persistence.subscription_repository import SubscriptionRepository
 from relay.kernel.entities.subscription import Subscription
@@ -23,6 +24,7 @@ router = APIRouter(tags=["subscriptions"])
 )
 async def create_subscription(
     body: CreateSubscriptionRequest,
+    _owner_id: str = Depends(require_owner),
     endpoints: EndpointRepository = Depends(get_endpoint_repository),
     subscriptions: SubscriptionRepository = Depends(get_subscription_repository),
 ) -> Subscription:

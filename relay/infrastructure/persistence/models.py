@@ -9,6 +9,7 @@ model is the frozen Pydantic `Event` in relay/kernel/entities/event.py
 """
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Column,
     Float,
     ForeignKey,
@@ -64,6 +65,10 @@ subscriptions_table = Table(
     Column("event_types", ARRAY(String), nullable=False),
     Column("created_at", TIMESTAMP(timezone=True), nullable=False),
     Column("status", String, nullable=False, server_default="ACTIVE"),
+    CheckConstraint(
+        "status IN ('CREATED', 'ACTIVE', 'PAUSED', 'DISABLED', 'ARCHIVED')",
+        name="ck_subscriptions_status",
+    ),
 )
 
 # Delivery is a lifecycle aggregate (PENDING → SUCCESS | FAILED | DEAD_LETTER).
@@ -100,6 +105,12 @@ deliveries_table = Table(
         "event_id",
         "subscription_id",
         name="uq_deliveries_event_id_subscription_id",
+    ),
+    # `Delivery.status` is a plain str on the frozen kernel entity, so the
+    # documented state set is enforced here instead (see ADR 0014).
+    CheckConstraint(
+        "status IN ('PENDING', 'SUCCESS', 'FAILED', 'DEAD_LETTER')",
+        name="ck_deliveries_status",
     ),
 )
 
