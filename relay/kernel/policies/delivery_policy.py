@@ -108,6 +108,18 @@ class RetryPolicy(BaseModel):
             "after this many seconds regardless of max_retries. None means no deadline."
         ),
     )
+    jitter_ratio: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Random jitter applied as a fraction of the computed retry delay. "
+            "0.0 means no jitter (deterministic). 0.25 means ±25% of the delay. "
+            "Set by the Control Plane (Policy Synthesizer / Strategy); consumed by "
+            "the Data Plane (Retry Manager). This field exists so that jitter is a "
+            "policy decision, not a data-plane invention (see ADR 0003, ADR 0005)."
+        ),
+    )
 
 
 class ConcurrencyPolicy(BaseModel):

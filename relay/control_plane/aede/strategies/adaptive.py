@@ -69,6 +69,7 @@ class StrategyB(DeliveryStrategy):
                 max_retries=10,
                 backoff_strategy=BackoffStrategy.EXPONENTIAL,
                 backoff_multiplier=2.0,
+                jitter_ratio=0.15,
             ),
             concurrency_policy=ConcurrencyPolicy(
                 max_parallel=max_parallel,
