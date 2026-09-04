@@ -77,6 +77,13 @@ def _reject_non_public(candidate: str) -> None:
         addr = ip_address(candidate.split("%", 1)[0])
     except ValueError:
         return
+
+    # Unpack embedded IPv4 in IPv6 (e.g. 6to4 2002::/16 or IPv4-mapped ::ffff:0:0/96)
+    if addr.version == 6:
+        embedded_v4 = getattr(addr, "sixtofour", None) or getattr(addr, "ipv4_mapped", None)
+        if embedded_v4 is not None:
+            _reject_non_public(str(embedded_v4))
+
     if (
         addr.is_private
         or addr.is_loopback

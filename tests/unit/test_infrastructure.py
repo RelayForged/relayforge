@@ -78,6 +78,65 @@ class TestPolicyCacheAndFallback:
         future = datetime(2026, 8, 4, 12, 5, 1, tzinfo=timezone.utc)
         assert cache.get_policy("ep-test", current_time=future) is None
 
+    def test_ttl_fires_without_explicit_current_time(self, sample_policy):
+        """Bug fix: TTL must fire even when caller omits current_time.
+
+        Previously get_policy() only checked expiry when current_time was
+        truthy, so callers that omitted it got stale policies forever.
+        (Person A audit, Declined 3, Bug 3a)
+        """
+        import time
+        cache = InMemoryPolicyCache(default_ttl_seconds=1)
+        # Entry cached with wall-clock time and zero TTL
+        cache.set_policy("ep-stale", sample_policy, ttl_seconds=0)
+        time.sleep(0.01)
+
+        # Omitting current_time — should still expire via wall-clock check
+        assert cache.get_policy("ep-stale") is None
+
+    def test_set_policy_uses_aware_timestamps(self, sample_policy):
+        """Bug fix: set_policy must store timezone-aware timestamps.
+
+        Previously datetime.now() (naive) was used, causing TypeError
+        when get_policy compared against timezone-aware current_time.
+        (Person A audit, Declined 3, Bug 3b)
+        """
+        cache = InMemoryPolicyCache()
+        cache.set_policy("ep-tz", sample_policy)
+
+        # This must not raise TypeError on aware vs naive subtraction.
+        aware_now = datetime(2026, 8, 4, 12, 0, 0, tzinfo=timezone.utc)
+        result = cache.get_policy("ep-tz", current_time=aware_now)
+        # Policy was just cached, so it should still be valid.
+        assert result is not None
+
+    def test_cache_max_size_eviction(self, sample_policy):
+        """Bug fix: cache must not grow unbounded.
+
+        (Person A audit, Declined 3, Bug 3c)
+        """
+        cache = InMemoryPolicyCache(max_size=3)
+        for i in range(5):
+            cache.set_policy(f"ep-{i}", sample_policy, cached_at=NOW)
+
+        # Only 3 entries should remain
+        assert len(cache._cache) == 3
+        # Oldest entries (ep-0, ep-1) should have been evicted
+        assert cache.get_policy("ep-0", current_time=NOW) is None
+        assert cache.get_policy("ep-1", current_time=NOW) is None
+        # Newest entries should survive
+        assert cache.get_policy("ep-4", current_time=NOW) is not None
+
+    def test_tier_2_returns_none_when_expired(self, sample_policy):
+        """Tier 2 must not serve stale policies after TTL expiry."""
+        import time
+        cache = InMemoryPolicyCache(default_ttl_seconds=1)
+        cache.set_policy("ep-tier2", sample_policy, ttl_seconds=0)
+        time.sleep(0.01)
+
+        fallback_mgr = PolicyFallbackManager(cache=cache)
+        assert fallback_mgr.get_tier_2_cached_policy("ep-tier2") is None
+
     def test_tier_3_static_policy(self):
         cache = InMemoryPolicyCache()
         fallback_mgr = PolicyFallbackManager(cache=cache)

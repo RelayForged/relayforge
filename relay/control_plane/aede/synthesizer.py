@@ -69,6 +69,7 @@ def synthesize_policy(
             max_retries=10,
             backoff_strategy=BackoffStrategy.EXPONENTIAL,
             backoff_multiplier=2.0,
+            jitter_ratio=0.0,
         )
         concurrency_pol = ConcurrencyPolicy(max_parallel=10, queue_priority=10)
         isolation_pol = IsolationPolicy(action=IsolationAction.CONTINUE)
@@ -84,6 +85,7 @@ def synthesize_policy(
             max_retries=8,
             backoff_strategy=BackoffStrategy.EXPONENTIAL,
             backoff_multiplier=2.0,
+            jitter_ratio=0.1,
         )
         concurrency_pol = ConcurrencyPolicy(max_parallel=3, queue_priority=5)
         isolation_pol = IsolationPolicy(action=IsolationAction.REDUCE_CONCURRENCY)
@@ -99,6 +101,7 @@ def synthesize_policy(
             max_retries=5,
             backoff_strategy=BackoffStrategy.EXPONENTIAL,
             backoff_multiplier=2.0,
+            jitter_ratio=0.15,
         )
         concurrency_pol = ConcurrencyPolicy(max_parallel=1, queue_priority=2)
         isolation_pol = IsolationPolicy(action=IsolationAction.PAUSE)
@@ -128,6 +131,7 @@ def synthesize_policy(
             max_retries=6,
             backoff_strategy=BackoffStrategy.EXPONENTIAL,
             backoff_multiplier=1.5,
+            jitter_ratio=0.25,
         )
         concurrency_pol = ConcurrencyPolicy(max_parallel=1, queue_priority=8)
         isolation_pol = IsolationPolicy(action=IsolationAction.CONTINUE)
