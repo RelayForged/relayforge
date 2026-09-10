@@ -32,6 +32,7 @@ dev = [
 include = ["relay*"]
 
 [tool.pytest.ini_options]
+pythonpath = ["."]
 testpaths = ["tests"]
 # The data-plane suite is async throughout; "auto" avoids an
 # @pytest.mark.asyncio on every test. No existing test is async, so this
