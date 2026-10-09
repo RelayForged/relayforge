@@ -24,6 +24,10 @@ class ExplainabilityRepository(Protocol):
         """Fetch latest explainability record for an endpoint."""
         ...
 
+    def get_history(self, endpoint_id: str) -> list[ExplainabilityRecord]:
+        """Fetch full chronological history of explainability records for an endpoint."""
+        ...
+
 
 class InMemoryExplainabilityRepository:
     """
@@ -48,3 +52,6 @@ class InMemoryExplainabilityRepository:
         if not records:
             return None
         return records[-1]
+
+    def get_history(self, endpoint_id: str) -> list[ExplainabilityRecord]:
+        return list(self._by_endpoint.get(endpoint_id, []))

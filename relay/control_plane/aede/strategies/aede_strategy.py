@@ -27,13 +27,14 @@ class StrategyC(DeliveryStrategy):
     """
 
     def __init__(self, thresholds: StateMachineThresholds | None = None):
+        # Matches the production default in relay/control_plane/aede/service.py.
         self.thresholds = thresholds or StateMachineThresholds(
-            degradation_threshold=80.0,
-            degradation_recovery_threshold=90.0,
-            unstable_threshold=60.0,
-            unstable_recovery_threshold=70.0,
+            degradation_threshold=75.0,
+            degradation_recovery_threshold=95.0,
+            unstable_threshold=55.0,
+            unstable_recovery_threshold=85.0,
             quarantine_threshold=30.0,
-            recovery_threshold=90.0,
+            recovery_threshold=80.0,
         )
 
     @property
