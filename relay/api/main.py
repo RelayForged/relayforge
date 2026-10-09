@@ -12,13 +12,15 @@ from relay.api.endpoints import router as endpoints_router
 from relay.api.events import router as events_router
 from relay.api.middleware import BodySizeLimitMiddleware
 from relay.api.subscriptions import router as subscriptions_router
-from relay.infrastructure.messaging.admin import ensure_topics
-from relay.infrastructure.messaging.producer import close as close_producer
+from relay.infrastructure.messaging.producer import close as close_producer, warmup as warmup_producer
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    await ensure_topics()
+    # warmup() covers ensure_topics() + producer.start() together -- paying
+    # the full cold-start cost once at boot rather than splitting it (see
+    # relay/infrastructure/messaging/producer.py::warmup).
+    await warmup_producer()
     yield
     await close_producer()
 
