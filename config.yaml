@@ -1,31 +1,35 @@
 # Relay Platform — Configuration
 #
-# This file is the single source of truth for all configurable thresholds and weights.
-# No numeric threshold or weight is hardcoded in source code — everything lives here.
+# NOTE ON ACCURACY: this file documents the values actually used at runtime, but it is not
+# currently loaded by anything -- relay/infrastructure/config_loader.py defines a ConfigLoader
+# that would read this file, but nothing in the codebase calls it. The real runtime defaults
+# live in relay/kernel/value_objects/eri.py (OPTIMAL_ERI_WEIGHTS) and
+# relay/control_plane/aede/service.py (AEDEService's StateMachineThresholds default). Keep this
+# file's values in sync with those two whenever either changes, until ConfigLoader is wired in.
 #
 # Weights in the `eri` section must sum to exactly 1.0.
-# The platform validates this constraint at startup.
 #
-# Values below are the initial research defaults from arch.md.
-# Modify only via this file — never via environment variables or source code.
 # Benchmark experiments change these values to compare strategy configurations.
 
 eri:
   # Number of most-recent DeliveryAttempts included in each ERI evaluation.
   # Attempt-count window only — no time-based filter. See ADR 0009.
-  window_size: 50
+  window_size: 100
 
   # Weights for each sub-metric. Must sum to exactly 1.0.
-  # These are disclosed design parameters, not optimised values.
-  # The research contribution is the AEDE framework, not the specific weights.
-  success_rate_weight: 0.35
-  latency_weight: 0.20
-  consecutive_failures_weight: 0.20
-  timeout_weight: 0.10
-  http_5xx_weight: 0.05
-  queue_depth_weight: 0.05
-  recovery_trend_weight: 0.05
-  # Sum: 0.35 + 0.20 + 0.20 + 0.10 + 0.05 + 0.05 + 0.05 = 1.00 ✓
+  # Discovered by a genetic-algorithm search (benchmark/genetic_optimizer.py) over the
+  # calibration scenario set, with recovery_trend_weight capped at 0.15 (it is the one
+  # sub-score that is not a smooth function of the telemetry -- see
+  # RECOVERY_TREND_WEIGHT_CAP in that file). Re-verified against the full held-out evaluation
+  # set before adoption; disclosed as a calibration baseline, not a claimed global optimum.
+  success_rate_weight: 0.374948
+  latency_weight: 0.002808
+  consecutive_failures_weight: 0.463822
+  timeout_weight: 0.002808
+  http_5xx_weight: 0.002808
+  queue_depth_weight: 0.002808
+  recovery_trend_weight: 0.149998
+  # Sum: 0.374948 + 0.002808 + 0.463822 + 0.002808 + 0.002808 + 0.002808 + 0.149998 = 1.0 ✓
 
   # Latency: response times below this are scored as fully healthy (score = 1.0).
   # Times above this decay the latency sub-score toward 0.0.
@@ -44,24 +48,39 @@ state_machine:
   # ERI thresholds that trigger state transitions.
   # Degradation thresholds are LOWER than recovery thresholds — this is hysteresis.
   # The platform trusts failure quickly and trusts recovery cautiously. See ADR 0008.
+  #
+  # Gaps widened from the original 80/90 and 60/70 (10-point gaps) to 75/95 and 55/85
+  # (20-point gaps): under sustained borderline (not catastrophic) degradation, ERI within the
+  # sliding window was observed to swing by ~40 points, which straddled the narrower gaps and
+  # caused persistent state flapping. The wider gaps make recovery stickier once degraded,
+  # without slowing detection of genuine outages (trigger thresholds moved down slightly, not
+  # up). See relay/control_plane/aede/service.py and the held-out evaluation in
+  # docs/report/04-evaluation-methodology.md §4.14.
 
   # AVAILABLE → OBSERVED_DEGRADATION  (if ERI drops below this)
-  degradation_threshold: 80
+  degradation_threshold: 75
 
-  # OBSERVED_DEGRADATION → AVAILABLE  (if ERI rises above this — hysteresis gap of 10)
-  degradation_recovery_threshold: 90
+  # OBSERVED_DEGRADATION → AVAILABLE  (if ERI rises above this — hysteresis gap of 20)
+  degradation_recovery_threshold: 95
 
   # OBSERVED_DEGRADATION → UNSTABLE  (if ERI drops below this)
-  unstable_threshold: 60
+  unstable_threshold: 55
 
-  # UNSTABLE → OBSERVED_DEGRADATION  (if ERI rises above this — hysteresis gap of 10)
-  unstable_recovery_threshold: 70
+  # UNSTABLE → OBSERVED_DEGRADATION  (if ERI rises above this — hysteresis gap of 30)
+  unstable_recovery_threshold: 85
 
   # UNSTABLE → QUARANTINED  (if ERI drops below this, sustained over the window)
   quarantine_threshold: 30
 
   # RECOVERING → AVAILABLE  (if ERI exceeds this, sustained over recovery_window_size)
-  recovery_threshold: 90
+  # Lowered from 90 to 80: at 90, two calibration scenarios (persistent-failure-then-restore)
+  # never actually finished recovering within their test length, and mean-time-to-recovery on
+  # held-out scenarios was 222-319 events. 80 stays 5 points above degradation_threshold (75) --
+  # comfortably safe, since ERI is climbing steadily through that range during a genuine
+  # recovery, not hovering near it -- and has zero measured effect on outage-detection speed
+  # (Hypothesis 1 unaffected across a full threshold sweep). See
+  # docs/report/04-evaluation-methodology.md §4.14.5.
+  recovery_threshold: 80
 
   # Number of consecutive successful probe attempts required to leave RECOVERING.
   # Enforces conservative recovery — stability must be demonstrated, not just observed once.
