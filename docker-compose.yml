@@ -49,7 +49,7 @@ services:
     image: postgres:15-alpine
     container_name: postgres
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5434}:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-relay}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-relaypassword}
@@ -67,15 +67,135 @@ services:
     container_name: redis
     # Not wired until Week 5-6 (three-tier PolicyCache), but it was
     # running with no authentication at all.
-    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-relaypassword}"]
     ports:
       - "127.0.0.1:6379:6379"
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-relaypassword}"]
+    volumes:
+      - redis_data:/data
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD:-relaypassword} ping"]
+      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD:-relaypassword} ping || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 5
 
+  migrator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: relay-migrator
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-relay}:${POSTGRES_PASSWORD:-relaypassword}@postgres:5432/${POSTGRES_DB:-relaydb}
+      ASYNC_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-relay}:${POSTGRES_PASSWORD:-relaypassword}@postgres:5432/${POSTGRES_DB:-relaydb}
+      RELAY_ENV: dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  simulator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: relay-simulator
+    command: ["uvicorn", "simulator.main:app", "--host", "0.0.0.0", "--port", "8080"]
+    ports:
+      - "127.0.0.1:${SIMULATOR_PORT:-8088}:8080"
+    environment:
+      RELAY_ENV: dev
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/docs || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: relay-api
+    command: ["uvicorn", "relay.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-relay}:${POSTGRES_PASSWORD:-relaypassword}@postgres:5432/${POSTGRES_DB:-relaydb}
+      ASYNC_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-relay}:${POSTGRES_PASSWORD:-relaypassword}@postgres:5432/${POSTGRES_DB:-relaydb}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-relaypassword}@redis:6379/0
+      RELAY_ENV: dev
+      RELAY_ALLOW_PRIVATE_TARGETS: "true"
+      AEDE_ENABLED: "true"
+      ERI_ENABLED: "true"
+      STATE_MACHINE_ENABLED: "true"
+      AEDE_QUARANTINE_THRESHOLD: "45.0"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/docs || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  dispatcher:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: relay-dispatcher
+    command: ["python", "-m", "relay.data_plane.dispatcher.main"]
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-relay}:${POSTGRES_PASSWORD:-relaypassword}@postgres:5432/${POSTGRES_DB:-relaydb}
+      ASYNC_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-relay}:${POSTGRES_PASSWORD:-relaypassword}@postgres:5432/${POSTGRES_DB:-relaydb}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-relaypassword}@redis:6379/0
+      RELAY_ENV: dev
+      RELAY_ALLOW_PRIVATE_TARGETS: "true"
+      AEDE_ENABLED: "true"
+      ERI_ENABLED: "true"
+      STATE_MACHINE_ENABLED: "true"
+      AEDE_QUARANTINE_THRESHOLD: "45.0"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+      simulator:
+        condition: service_started
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: relay-dashboard
+    command: ["uvicorn", "relay.dashboard.main:app", "--host", "0.0.0.0", "--port", "8090"]
+    ports:
+      - "127.0.0.1:8090:8090"
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-relay}:${POSTGRES_PASSWORD:-relaypassword}@postgres:5432/${POSTGRES_DB:-relaydb}
+      ASYNC_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-relay}:${POSTGRES_PASSWORD:-relaypassword}@postgres:5432/${POSTGRES_DB:-relaydb}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-relaypassword}@redis:6379/0
+      RELAY_ENV: dev
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8090/api/chart/endpoints || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
 volumes:
   postgres_data:
   kafka_data:
+  redis_data:
+
