@@ -165,6 +165,7 @@ Thumbs.db
 # Agent Configs
 CLAUDE.md
 .agents/
+.agent/
 .gemini/
 
 # Cursor configuration and rules — local only, never commit
