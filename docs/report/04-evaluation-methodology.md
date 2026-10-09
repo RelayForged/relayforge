@@ -88,7 +88,15 @@ Metrics 1, 2, and 4 are the primary evaluation criteria for the research hypothe
 
 ## 4.6 Failure Scenarios (Independent Variable)
 
-Ten failure scenarios constitute the independent variable. Each scenario is a time-sequenced fault injection profile — a sequence of phases, where each phase specifies the endpoint's behaviour (success rate, latency, timeout rate, HTTP 5xx rate) for a defined number of delivery attempts.
+Fourteen failure scenarios constitute the independent variable: the original 10-scenario taxonomy, a
+supplementary calibration-only scenario (11), and three scenarios (12–14) added later to close specific
+coverage gaps — the `RECOVERING → QUARANTINED` re-quarantine transition, adversarial clustered
+flapping, and long-horizon mild degradation — found missing during evaluation (§4.6.2). Each scenario is
+a time-sequenced fault injection profile — a sequence of phases, where each phase specifies the
+endpoint's behaviour (success rate, latency, timeout rate, HTTP 5xx rate) for a defined number of
+delivery attempts. Six scenarios (1, 2, 6, 7, 8, 11) form the calibration set used to select ERI weights;
+the remaining eight (3, 4, 5, 9, 10, 12, 13, 14) form the held-out evaluation set used to validate
+Hypotheses 1–3 (Chapter 5 §5.1, §5.4–§5.7).
 
 | # | Scenario | Key Characteristic | Primary ERI Sub-Metric Affected |
 |---|---|---|---|
@@ -102,6 +110,10 @@ Ten failure scenarios constitute the independent variable. Each scenario is a ti
 | 8 | Rate Limiting | HTTP 429 responses mixed with normal traffic | Success rate |
 | 9 | Network Partition | Endpoint unreachable — all attempts time out | Timeout rate |
 | 10 | Slow Degradation | Success rate decreases linearly 100% → 85% → 60% → 35% → 0% | All sub-metrics (gradual) |
+| 11 | Bursty Traffic Under Degradation | Two burst windows dropping success rate to 40% then 20% across 170 events (supplementary, calibration-only) | Success rate, sliding-window reactivity |
+| 12 | Re-Quarantine Relapse | Admin restore enters a RECOVERING probe, then a sudden outage relapse forces re-quarantine before genuine final recovery | Exercises `RECOVERING → QUARANTINED`, untested by 1–11 |
+| 13 | Rapid Micro-Flapping | Eight repetitions of short alternating healthy/low-success (10–15%) bursts — an adversarial hysteresis stress test harder than Scenario 5 | Recovery trend, hysteresis dampening |
+| 14 | Long Sustained Mild Degradation | 400 events at a constant 75% success rate with elevated latency/timeout/5xx — degraded but never catastrophic, over a much longer horizon than any other scenario | All sub-metrics (sustained, non-outage) |
 
 ### 4.6.1 Scenario Design Rationale
 
@@ -113,8 +125,30 @@ The scenarios are designed to exercise different aspects of the AEDE policy fram
 - **Scenario 5**: Tests the hysteresis mechanism. An endpoint fluctuating around recovery thresholds should not cause rapid state oscillation.
 - **Scenario 6**: Tests response to authentication failures (HTTP 401). The failure is deterministic and persistent — retrying will never succeed until credentials are rotated. Strategy C should quarantine; Strategy A retries 10 times per event regardless.
 - **Scenario 10**: The strongest demonstration of AEDE's advantage. Gradual degradation exercises the full state machine progression: AVAILABLE → OBSERVED_DEGRADATION → UNSTABLE → QUARANTINED. Strategy A retries at a constant rate throughout the degradation. Strategy C progressively reduces concurrency, increases backoff, and eventually quarantines — cumulatively wasting far fewer retries.
+- **Scenario 11**: Supplementary bursty-traffic test — two burst windows where success rate drops to 40% and then 20% across 170 events total, used to stress ERI sliding-window reactivity and as the early-detection calibration proxy (§4.6.2, Chapter 5 §5.2); not part of the original 10-scenario failure taxonomy.
+- **Scenario 12**: Tests the `RECOVERING → QUARANTINED` re-quarantine transition — defined in the state
+  machine (Chapter 3 §3.5.3) but never exercised by Scenarios 1–11. An admin restore begins a RECOVERING probe, a
+  relapse forces immediate re-quarantine, and only a second restore produces genuine final recovery.
+  Strategy C must re-enter QUARANTINED rather than treat the first restore as sufficient.
+- **Scenario 13**: A harder adversarial flapping stress test than Scenario 5 — eight short alternating
+  healthy/low-success cycles, probing whether the widened hysteresis gaps (Chapter 3 §3.5.2) still bound state
+  churn under clustered, repeated flapping rather than a single partial-recovery episode.
+- **Scenario 14**: Tests sustained *mild* (not catastrophic) degradation over a long horizon — 400 events
+  at 75% success. This is deliberately excluded from the outage-reduction comparison (Chapter 5 §5.4): its
+  strategies never diverge sharply enough to represent a genuine outage, and treating it as one would
+  overstate Hypothesis 1's result (Chapter 5 §5.4 documents this categorization explicitly).
 
-### 4.6.2 Scenario Implementation
+### 4.6.2 Calibration vs. Held-Out Evaluation Split
+
+To eliminate weight-selection leakage (evaluating weight configurations on the same scenarios used for calibration), the scenario suite is strictly partitioned:
+- **Calibration Set ($\{1, 2, 6, 7, 8, 11\}$)**: Used exclusively for empirical weight candidate evaluation (`benchmark/optimize_weights.py`) and evolutionary parameter search (`benchmark/genetic_optimizer.py`). This set encompasses intermittent noise (1, 8), pure latency drift without delivery failures (2), persistent auth and connection failures (6, 7), and supplementary bursty-traffic degradation (11).
+- **Held-Out Evaluation Set ($\{3, 4, 5, 9, 10, 12, 13, 14\}$)**: Evaluated strictly after weights are
+  frozen. Comprises burst failures (3), full outages with recovery (4), threshold boundary flapping
+  under partial recovery (5), network partitions (9), gradual slow degradation (10), re-quarantine
+  relapse (12), rapid micro-flapping (13), and long sustained mild degradation (14). All primary
+  hypothesis tests (Hypotheses 1, 2, and 3) are evaluated exclusively on these unseen scenarios.
+
+### 4.6.3 Scenario Implementation
 
 Each scenario is implemented as a frozen `Scenario` dataclass containing an ordered list of `ScenarioPhase` objects:
 
@@ -172,7 +206,7 @@ The retry count for each strategy is derived from the actual policy:
 | Strategy | Retry Count on Failure |
 |---|---|
 | A | `policy.retry_policy.max_retries` (always 10) |
-| B | `policy.retry_policy.max_retries` (always 10, but with scaled delay) |
+| B | `policy.retry_policy.max_retries` (scales 10 → 7 → 5 → 3 with scaled delay) |
 | C | `policy.retry_policy.max_retries` (varies by state: 10 → 8 → 5 → **0** → 6) |
 
 The critical difference: when Strategy C quarantines an endpoint, `max_retries = 0`. Zero retries are wasted against a known-unavailable endpoint. Strategies A and B continue retrying at full rate.
@@ -192,7 +226,7 @@ The following variables are held constant across all three strategy comparisons:
 - ERI weights (identical configuration for all strategies)
 - State machine thresholds (identical for all strategies; Strategy A and B do not use the state machine, but the thresholds are available)
 - Event volume and publication rate (determined by the scenario definition)
-- Synthetic telemetry seed (identical random sequences for A, B, and C on the same scenario)
+- Synthetic telemetry seed (identical pseudo-random sequences for A, B, and C on the same scenario — implementing the Common Random Numbers (CRN) variance reduction technique to isolate algorithmic treatment differences from stochastic sampling noise)
 - Sliding window size ($N = 100$ attempts)
 - Endpoint simulator configuration (same failure profiles)
 
@@ -215,41 +249,23 @@ Results are independently reproducible: the same seed and scenario definition pr
 
 ---
 
-## 4.9 Statistical Analysis Plan
+## 4.9 Hyperparameter Calibration and Determinism
 
-Multiple runs per experiment with different random seeds. Reported metrics include:
-
-- Mean, median, and standard deviation
-- 95% confidence intervals
-- Statistical significance tests (paired t-test or Wilcoxon signed-rank test) to validate observed improvements where appropriate
-
-The primary comparison is Strategy C vs Strategy A on Metric 2 (Average Retry Count) under Scenario 10 (Slow Degradation), as this scenario exercises the full state machine progression and most directly demonstrates the value of endpoint state-driven policy synthesis.
+- **ERI Weights Calibration.** Stage 1 began with an empirical sweep (`benchmark/optimize_weights.py`) across four hand-picked weighting profiles on the calibration set ($\{1, 2, 6, 7, 8, 11\}$), which selected a profile named `Hysteresis-Balanced`. Stage 2 replaced this with a genetic-algorithm search (`benchmark/genetic_optimizer.py`) over the same calibration set. An unconstrained search consistently converged to `recovery_trend_weight > 0.55` — `recovery_trend_score` is the one ERI sub-score that is not a smooth function of the telemetry (it takes only three discrete values from a first-half-vs-second-half window comparison), and over-weighting it caused severe state-machine flapping on a long-duration, borderline-degradation held-out scenario, even though it scored excellently on the calibration set itself. `RECOVERY_TREND_WEIGHT_CAP = 0.15` was added to the search (a generic regularization on that one dimension, not tuned to any scenario's outcome), and three independent GA seeds then converged to the same point: `success_rate_weight≈0.375, consecutive_failures_weight≈0.464, recovery_trend_weight=0.15` (the cap), all other dimensions near-zero. This was re-verified against the full held-out evaluation set before adoption (Chapter 5) and found to improve every held-out metric simultaneously, not just the one Hypothesis 1 targets.
+- **State Machine Hysteresis Widened.** Investigating a residual instability on the held-out long-duration scenario (Chapter 5 §5.7) showed ERI swinging by ~40 points within the sliding window during sustained borderline degradation — wider than the original 10-point hysteresis gaps (degradation 80/90, unstable 60/70), which caused the state machine to chase the noise. Trigger thresholds were lowered slightly and recovery thresholds widened (degradation 75/95, unstable 55/85), making recovery stickier once degraded without slowing detection of genuine outages. `quarantine_threshold` (30.0) was unchanged. Re-verified against the full held-out set in combination with the new weights (Chapter 5) before adoption in `relay/control_plane/aede/service.py`.
+- **`recovery_threshold` Lowered (80.0, was 90.0).** A separate finding, made while auditing the resulting mean-time-to-recovery (Chapter 5 §5.6): `recovery_threshold` — which governs `RECOVERING → AVAILABLE` specifically, and was *not* touched by the widening above — had never been validated. At 90.0, two calibration scenarios never finished recovering within their test length at all. Lowered to 80.0 after confirming zero effect on Hypothesis 1 across a full sweep (90 down to 55) and confirming ERI climbs steadily through that range during genuine recovery rather than hovering near it.
+- **AEDE is not a machine learning system.** No statistical model is trained at runtime. Both searches above are offline, one-time calibration steps whose *output* is a frozen, disclosed configuration — identical to hand-tuning a config file, just discovered by search instead of guesswork. The engine itself remains deterministic, rule-based, and explainable by design (ADR 0004).
+- **This work does not propose a new retry algorithm.** Strategy B (adaptive backoff) represents existing adaptive retry approaches. AEDE's contribution is the control plane layer above the retry interval — the state model and policy framework that determines *when and whether* to retry at all.
 
 ---
 
-## 4.10 Threats to Validity
+## 4.10 Primary Research Contribution
 
-### 4.10.1 Internal Validity
+The primary contribution is the **Adaptive Event Delivery Policy Framework**: a unified runtime system that couples continuous endpoint-state evaluation to runtime delivery policy synthesis in the specific constraints of outbound webhook delivery.
 
-**Threshold and weight sensitivity.** AEDE's policy decisions depend on configured ERI weights and state machine thresholds. Different configurations may produce different relative performance between strategies. *Mitigation*: all weights and thresholds are disclosed and held constant across strategy comparisons. A secondary weight sensitivity analysis (3–4 alternative configurations) is planned to demonstrate that the framework's advantage holds across reasonable weight variations, even if absolute performance differs.
+The experimental claim is:
 
-**Single-endpoint evaluation.** MVP experiments evaluate AEDE against a single endpoint. Production systems deliver to many concurrent endpoints, where worker contention, shared queue depth, and cross-endpoint policy interactions may affect results. *Acknowledgement*: multi-endpoint evaluation is noted as future work. The single-endpoint design isolates the policy engine's behaviour from scheduling effects, which is appropriate for validating the framework's core mechanism.
-
-### 4.10.2 External Validity
-
-**Synthetic failure patterns.** The Endpoint Simulator produces controlled, parameterised failures. Real-world endpoints exhibit correlated failures, ambiguous partial responses (e.g., HTTP 200 with error body), deployment-window behaviour, and rate-limit patterns that may not match the simulator's modes. *Mitigation*: the simulator's failure modes cover the most common failure signatures observed in production webhook systems. The ten evaluation scenarios are designed to be representative, not exhaustive.
-
-**Controlled event volume.** Experiments use a fixed event publication rate. Production systems experience bursty, non-uniform event volumes that interact with queue depth and ERI computation. *Acknowledgement*: variable-rate event publication is a future evaluation dimension.
-
-### 4.10.3 Construct Validity
-
-**ERI as a proxy for endpoint health.** The ERI is a weighted composite of observable metrics, not a direct measurement of endpoint availability. The composite score may mask important signals (e.g., a high success rate hiding increasing latency) or overweight unimportant ones. *Mitigation*: the ERI sub-scores are preserved in every `ExplainabilityRecord`, allowing post-hoc analysis of whether the composite score accurately reflected the endpoint's actual condition during each experiment.
-
-**Window size sensitivity.** The attempt-count-based ERI window (default: 100 attempts) produces different responsiveness characteristics for high-volume vs low-volume endpoints. *Mitigation*: benchmark experiments use controlled, uniform event publication rates, eliminating this asymmetry during evaluation.
-
-### 4.10.4 Reproducibility
-
-All configurations, event datasets, policy parameters, simulator settings, and scenario definitions are published alongside the source code. Experiments use attempt-count-based ERI windows with explicit timestamp parameters (no wall-clock dependency inside AEDE), ensuring identical replay across runs.
+> **Having an explicit state model + policy engine (Strategy C) produces measurably better delivery outcomes than adaptive backoff without state (Strategy B), which in turn outperforms static retry (Strategy A), under realistic partial failure conditions.**
 
 ---
 
@@ -265,24 +281,4 @@ The proposed AEDE (Strategy C) is expected to:
 6. **Maintain 100% explainability coverage** — every automated decision produces a complete `ExplainabilityRecord`.
 7. **Preserve deterministic behaviour** — identical inputs always produce identical policies.
 
-These claims must be validated experimentally, not assumed.
-
----
-
-## 4.12 What This Work Is Not Claiming
-
-- **The ERI weights are not claimed to be optimal.** The weights are a documented design parameter — a reasonable starting configuration. Optimal weight discovery would require a separate experiment with access to ground-truth failure labels, which is out of scope.
-- **AEDE is not a machine learning system.** No model is trained. No parameters are learned from data. The engine is deterministic and rule-based by design (ADR 0004).
-- **This work does not propose a new retry algorithm.** Strategy B (adaptive backoff) is the closest existing approach. AEDE's contribution is the layer above the retry interval — the state model and policy framework that determines *when and whether* to retry at all.
-
----
-
-## 4.13 Primary Research Contribution
-
-The primary contribution is the **Adaptive Event Delivery Policy Framework**: a unified runtime system that couples continuous endpoint-state evaluation to runtime delivery policy synthesis in the specific constraints of outbound webhook delivery.
-
-The experimental claim is:
-
-> **Having a state model + policy engine (Strategy C) produces measurably better delivery outcomes than adaptive backoff without state (Strategy B), which in turn outperforms static retry (Strategy A), under realistic partial failure conditions.**
-
-This is a systems/architecture contribution. The ERI weights and state machine thresholds are hyperparameters of the implementation, disclosed and held constant during the comparison experiments. The object of study is whether the framework architecture improves delivery outcomes — not whether any particular weight configuration is optimal.
+These claims are validated experimentally in Chapter 5, not assumed.

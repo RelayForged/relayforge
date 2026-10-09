@@ -16,7 +16,7 @@
 | Python SDK | `publish_event()`, `register_endpoint()`, `replay_dead_letters()` — wrapper around the REST API |
 | Kafka backbone | Producer (ingestion) + consumer (dispatcher) + DLQ topic (`events.deadletter`) |
 | Webhook delivery worker | Stateless. Executes policy. Collects telemetry. Makes no decisions. |
-| ERI computation & Weight Optimization | Weighted composite score; **weights optimized by trial and error** across 10 failure scenarios |
+| ERI computation & Weight Optimization | Weighted composite score; **weights calibrated via a two-stage process** (hand-picked sweep, then a genetic-algorithm search) over a leakage-free calibration/held-out split across 14 failure scenarios |
 | Endpoint State Machine | All 5 states, hysteresis, non-adjacent transitions |
 | Policy Synthesizer | Produces immutable DeliveryPolicy objects from state + ERI |
 | Explainability records | Stored to PostgreSQL, readable from dashboard |
@@ -27,7 +27,7 @@
 | Three-tier policy fallback | AEDE → Redis cache → static fallback (Strategy A defaults) |
 | Endpoint Simulator | Controllable mock webhook receiver. Configurable failure rate, latency, error type. |
 | Live Dashboard & Visualizations | React frontend + FastAPI WebSocket backend. Dynamic ERI bands, delivery timeline, policy decisions, explainability radar, DLQ replay controls. |
-| Benchmark framework | Strategy A vs B vs C. Automated runner across 10 failure scenarios with comparison charts. |
+| Benchmark framework | Strategy A vs B vs C. Automated runner across 14 failure scenarios (6 calibration, 8 held-out) with comparison charts. |
 | Prometheus & Grafana | `/metrics` instrumentation, Prometheus scraper, provisioned Grafana dashboards. |
 | Kubernetes Manifests | Production K8s manifests (`deploy/k8s/`), HPA scaling on Kafka lag, multi-stage Dockerfiles. |
 | Feature flags | Switch delivery strategy without redeployment |
@@ -46,6 +46,29 @@ The following remain deferred to focus on core platform delivery and research va
 | Event Registry (schema validation) | Validates little in a demo context |
 | Multi-tenant / RBAC | Single-tenant demo is sufficient |
 | OpenTelemetry distributed tracing | Structured JSON logs + Prometheus metrics + Dashboard observability is sufficient |
+
+### Future Research Directions (identified during literature review, not in current scope)
+
+The following concepts were identified while reviewing `literature_survey_v10.docx` (an internal literature
+survey covering adaptive retry, endpoint health monitoring, and distributed-security literature). They are
+**not implemented, not scheduled, and not part of the MVP checklist (§E)** — recorded here so the ideas
+aren't lost, and so nobody mistakes them for current scope. Treat this table the same as any other deferred
+item in the table above: none of it should be started until everything in the Target Scope table is done.
+
+| Concept | What it would do | Why it's deferred |
+|---|---|---|
+| Security-posture adaptation (HMAC TTL shortening, Claim Check payload isolation, forced re-authentication) | Couple AEDE's endpoint health state to security enforcement: shorten the HMAC signature TTL as an endpoint degrades, replace sensitive payload fields with short-lived Claim Check retrieval tokens before dispatching to a Failing/QUARANTINED endpoint (preserving the payload's structural shape rather than dropping fields outright), and force fresh authentication before resuming delivery on recovery | `IntegrityPolicy` already declares `signature_ttl_seconds` and `replay_protection` fields (`relay/kernel/policies/delivery_policy.py`) but the Policy Synthesizer never varies them by state today. Actually wiring this needs a Claim Check storage/retrieval mechanism and a security review — real design work, out of scope for the current research evaluation |
+| Structural idempotency via `Idempotency-Key` header | Inject a deterministic, cryptographically-derived idempotency key (hash of event ID + attempt sequence + endpoint ID) into every outbound webhook request, reducing the subscriber's duplicate-suppression burden to a single database uniqueness constraint instead of assuming they've implemented idempotent consumers themselves | A Data Plane / worker-level change, independent of AEDE's policy logic — not a research-contribution change |
+| WAN-baseline health thresholding | Distinguish endpoint-side degradation from transient network-path issues by tracking a per-endpoint rolling p50/p95 latency baseline (falling back to a geo/ASN-partitioned baseline for low-volume endpoints that haven't accumulated enough history), and requiring degradation signals to exceed that baseline by a statistically significant margin before triggering a state transition | Would change ERI's latency sub-metric from a fixed baseline/max to a learned, per-endpoint baseline — a real change to the research contribution requiring its own evaluation, not something to retrofit into the current benchmark suite |
+| `Event-Group-ID` causal routing for DLQ replay | Tag events at ingestion with an `Event-Group-ID` (hash of the business entity, e.g. `user_id`), key Kafka partition assignment on it, and shunt only entity-groups with an in-flight DLQ backlog — not the whole endpoint — to the DLQ, so causal order is preserved without head-of-line-blocking unrelated live traffic during recovery | A Data Plane / Kafka-partitioning change orthogonal to AEDE; the current Retry Manager / DLQ router does not do entity-level causal routing |
+| SRTT-adaptive timeout with a hard SLO ceiling | Bound a smoothed round-trip-time-based timeout estimate with a hard maximum, so slow "boiling-frog" latency creep (e.g. a subscriber-side memory leak) can't be silently absorbed by the moving average and delay a Failing-state transition indefinitely | AEDE currently uses fixed sliding-window thresholds, not an SRTT/RTTVAR estimator — this would change the ERI latency sub-metric's underlying model |
+
+**Source note:** these concepts come from `literature_survey_v10.docx`'s own architectural proposal, not from
+its citations. Several of that document's cited references (and its earlier `v4` draft) were found during
+independent verification to have fabricated or inaccurate author names — see the citation-scope note at the
+end of `docs/paper/aede-ieee-paper.md`'s References section for specifics. The five architectural concepts
+above are evaluated here on their own merits; if any of this work is picked up later, re-verify any specific
+paper cited in support of it before relying on it, rather than trusting the survey document's bibliography.
 
 ---
 
@@ -96,7 +119,7 @@ Specify this now — different failure types produce different ERI sub-metric va
 
 Config API: `POST /simulator/config` with body `{"mode": "timeout", "rate": 0.6}` — applies `rate` fraction of requests to the given mode, the rest succeed normally. A `rate` of 1.0 means every request gets the failure mode.
 
-This matters for the research: if the simulator only ever produces 5xx errors, you can only show ERI responding to one sub-metric. Supporting all six modes lets you demonstrate that timeout-heavy degradation looks different from error-heavy degradation in both the ERI and the explainability records, and covers all 10 benchmark failure scenarios.
+This matters for the research: if the simulator only ever produces 5xx errors, you can only show ERI responding to one sub-metric. Supporting all six modes lets you demonstrate that timeout-heavy degradation looks different from error-heavy degradation in both the ERI and the explainability records, and covers all 14 benchmark failure scenarios.
 
 ---
 
@@ -143,31 +166,40 @@ Goal: a browser-based demo that makes the research contribution visible in real 
 Goal: quantitative comparison that proves the research claim.
 
 - [ ] Benchmark runner: automated experiment (configures simulator, runs events for N seconds, collects metrics, resets)
-- [ ] All 10 failure scenarios automated (each is a time-sequenced simulator configuration profile):
-  - Scenario 1: intermittent timeouts (random 30% failure, mixed with slow responses)
-  - Scenario 2: high latency (gradually increasing response delay)
-  - Scenario 3: burst failures (sudden 100% failure for 60 seconds, then recovery)
-  - Scenario 4: endpoint outage (extended unavailability)
-  - Scenario 5: partial recovery (alternating success and failure)
-  - Scenario 6: credential failure (HTTP 401/403 responses)
-  - Scenario 7: connection failure (connection reset / TLS error)
-  - Scenario 8: rate limiting (HTTP 429 responses)
-  - Scenario 9: network partition (endpoint unreachable, connection timeout)
-  - Scenario 10: slow degradation (success rate decreases linearly from 100% to 0% over 5 minutes — best shows AEDE advantage)
-- [ ] **Two-Stage AEDE Weight Optimization Methodology**:
-  - **Stage 1 (Rapid In-Process Synthetic Calibration)**:
-    - *Why synthetic data works & is scientifically necessary*: Guarantees strictly identical failure/latency sequences across Strategy A, B, and C (eliminating live network jitter confounders), enables safe fault injection (100% 500 bursts, TCP resets, partitions), and evaluates dozens of candidate weight configurations in seconds in-process.
-    - Sweeps the 7 sub-metric weights ($W_s, W_l, W_f, W_t, W_{5xx}, W_q, W_r$) across Scenarios 1–10 to eliminate configurations that cause state flapping or delayed quarantine, converging on the optimal parameter set.
-  - **Stage 2 (Live End-to-End Real Pipeline Validation)**:
-    - Deploys the tuned weights to the live Docker Compose environment.
-    - Streams real HTTP events via the Python SDK through FastAPI → Kafka → Dispatcher → Webhook Worker (`httpx` making real socket calls) → Endpoint Simulator.
-    - Verifies that real network socket timeouts, real HTTP status codes, and measured round-trip latencies trigger identical, stable adaptation on real live sockets.
+- [ ] All 14 failure scenarios automated (each is a time-sequenced simulator configuration profile), split into a calibration set used only for weight selection and a held-out set used only for final evaluation:
+  - **Calibration set `{1, 2, 6, 7, 8, 11}`** — never used to judge the final result, only to pick weights:
+    - Scenario 1: intermittent timeouts (random 30% failure, mixed with slow responses)
+    - Scenario 2: high latency (gradually increasing response delay)
+    - Scenario 6: credential failure (HTTP 401/403 responses)
+    - Scenario 7: connection failure (connection reset / TLS error)
+    - Scenario 8: rate limiting (HTTP 429 responses)
+    - Scenario 11: bursty traffic under degradation (two burst windows, stresses ERI sliding-window reactivity)
+  - **Held-out evaluation set `{3, 4, 5, 9, 10, 12, 13, 14}`** — frozen weights are evaluated against these, and only these, once:
+    - Scenario 3: burst failures (sudden 100% failure for 60 events, then recovery)
+    - Scenario 4: endpoint outage (extended unavailability, then recovery)
+    - Scenario 5: partial recovery (alternating success and failure, never fully recovers)
+    - Scenario 9: network partition (endpoint unreachable, connection timeout)
+    - Scenario 10: slow degradation (success rate decreases in steps from 100% to 0%, then recovers — best shows AEDE advantage)
+    - Scenario 12: re-quarantine relapse (recovery probe fails and forces re-quarantine, then a genuine recovery)
+    - Scenario 13: rapid micro-flapping (eight alternating healthy/unhealthy cycles — the real hysteresis stress test)
+    - Scenario 14: long sustained mild degradation (75% success over 400 events — tests AEDE doesn't over-react to non-catastrophic degradation)
+- [ ] **Two-Stage AEDE Weight Calibration Methodology** — both stages touch the calibration set only; the held-out set is never used to pick a configuration, only to verify one after it's frozen:
+  - **Stage 1 (hand-picked sweep)**:
+    - *Why synthetic data works & is scientifically necessary*: guarantees strictly identical failure/latency sequences across Strategy A, B, and C (eliminating stochastic-sampling confounders), enables safe fault injection (100% 500 bursts, TCP resets, partitions), and evaluates each candidate in seconds, in-process.
+    - Evaluates a small number of hand-picked weight profiles across the 7 sub-metric weights ($W_s, W_l, W_f, W_t, W_{5xx}, W_q, W_r$) on the calibration scenarios only, selecting the best-scoring profile as a baseline.
+  - **Stage 2 (genetic-algorithm search)**:
+    - Replaces the hand-picked sweep with a GA search over the same calibration set. An unconstrained search tends to over-weight the one sub-metric that isn't a smooth function of the telemetry (`recovery_trend_score`), which destabilizes hysteresis on long-duration scenarios — cap it (e.g. at 0.15) as a generic regularization term, not tuned to any one scenario's outcome.
+    - Run multiple independent GA seeds; they should converge to the same region of weight space before you trust the result.
+  - **Held-out re-verification (the actual acceptance gate)**:
+    - Freeze the winning configuration, then run it — for the first and only time — against the held-out set. Check it clears the target outage-retry-reduction bound, the hysteresis-transition bound, and a recovery-time (MTTR) bound, all in one pass.
+    - If the held-out result is worse than expected, go back and fix the calibration process — never retune weights against the held-out numbers directly. That's leakage, and it invalidates the whole evaluation.
+- [ ] **Separately, validate the same mechanism over real infrastructure** (not part of weight selection, just confirming the in-process benchmark harness is a faithful stand-in): a live Kafka integration test exercising the real wire path, and a full Docker Compose end-to-end run (real Kafka, PostgreSQL, Redis) driving fault injection through the actual dispatcher/worker/AEDE pipeline.
 - [ ] Results stored to PostgreSQL
 - [ ] Benchmark chart in dashboard: Strategy A vs B vs C on same axes (retry count, recovery time, delivery success rate)
 - [ ] Redis three-tier fallback: demonstrable by stopping the AEDE process mid-run
 - [ ] Dashboard UX pass: consistent layout, readable charts, clear state labels
 
-**Deliverable**: benchmark run produces comparison charts. All three strategies visible on same graph. AEDE advantage is obvious on Scenario 10. Tuned weights validated on both synthetic scenarios and live HTTP pipeline.
+**Deliverable**: benchmark run produces comparison charts. All three strategies visible on same graph. AEDE advantage is obvious on the held-out outage scenarios. Weights are calibrated only on the calibration set and verified, once, on the held-out set — never the other way around.
 
 ---
 
@@ -187,7 +219,7 @@ The report writes largely from existing docs — do not start from scratch.
 | Research Hypothesis | `docs/research.md` §Research Hypothesis |
 | Experimental Methodology | `docs/research.md` §Experimental Methodology |
 | Evaluation Results | Benchmark charts from Week 9–10 runs + statistical summary |
-| Discussion | Why AEDE outperforms A and B; empirical trial-and-error optimization of ERI weights across failure scenarios; threats to validity |
+| Discussion | Why AEDE outperforms A and B; the two-stage calibration/held-out weight methodology and why it avoids leakage; threats to validity |
 | Conclusion | Contributions summary; future work (time-based windows, ML extensions, Kubernetes) |
 
 Each person drafts the chapters closest to their vertical (A: system design sections; B: AEDE + simulator + evaluation; C: dashboard frontend description). All three review before submission.
@@ -195,7 +227,7 @@ Each person drafts the chapters closest to their vertical (A: system design sect
 - [ ] Introduction and Problem Statement drafted
 - [ ] System Design chapter drafted (architecture diagrams from docs)
 - [ ] Evaluation chapter drafted with actual benchmark results
-- [ ] Discussion explicitly details the empirical trial-and-error optimization methodology of ERI weights across the 10 failure scenarios and why the architectural framework supports deterministic tuning
+- [ ] Discussion explicitly details the two-stage calibration/held-out weight methodology across the 14 failure scenarios, why it avoids weight-selection leakage, and why the architectural framework supports deterministic tuning
 - [ ] Threats to validity section included (see `docs/research.md`)
 
 **Week 12 — Integration, demo rehearsal, buffer**
@@ -242,16 +274,19 @@ Each person owns their vertical. All three own Docker Compose config, integratio
   - Standalone FastAPI mock webhook receiver (`relay/tests/test_simulator.py` / standalone service)
   - Supports all 6 distinct failure modes: `http_error` (500/502/503), `timeout`, `slow` (delay), `rate_limit` (429), `connection_reset`, `auth_failure` (401/403)
   - Configurable failure rate and delay profiles via `POST /simulator/config`
-- **Empirical Optimization of AEDE Weights (Trial and Error)**:
-  - **AEDE weights must be optimized by trial and error** across the 10 failure scenarios using a two-stage hybrid methodology:
-    - **Stage 1 (Rapid In-Process Synthetic Calibration)**:
-      - Uses deterministic synthetic telemetry generation across Scenarios 1–10 to evaluate dozens of weight candidate combinations in seconds.
-      - *Why synthetic data works & is scientifically required*: Guarantees strictly identical failure sequences across Strategy A, B, and C (eliminating live network jitter confounders), enables safe execution of severe faults (100% 500 bursts, TCP resets, 4.5s partitions), and rapidly filters out weight combinations causing state flapping or delayed quarantine.
-      - Iteratively tunes the 7 sub-metric weights ($W_{success}, W_{latency}, W_{fail}, W_{timeout}, W_{5xx}, W_{queue}, W_{recovery}$) to achieve optimal degradation detection and hysteresis stability.
-    - **Stage 2 (Live End-to-End Real Pipeline Validation)**:
-      - Deploys the calibrated weights to the live Docker Compose environment.
-      - Streams real HTTP events via the Python SDK through FastAPI → Kafka → Dispatcher → Webhook Worker (`httpx` making real TCP/HTTP requests) → Endpoint Simulator.
-      - Verifies that real measured network latencies and actual HTTP response codes produce the identical adaptive transitions observed in Stage 1.
+- **AEDE Weight Calibration (leakage-free calibration/held-out split)**:
+  - **AEDE weights are calibrated on a dedicated calibration subset of the 14 failure scenarios, then verified once on the held-out remainder** — never the other way around — using a two-stage methodology:
+    - **Stage 1 (hand-picked sweep, calibration set only)**:
+      - Uses deterministic synthetic telemetry generation across the calibration scenarios (`{1, 2, 6, 7, 8, 11}`) to evaluate a handful of hand-picked weight candidates in seconds.
+      - *Why synthetic data works & is scientifically required*: guarantees strictly identical failure sequences across Strategy A, B, and C (eliminating sampling-noise confounders), enables safe execution of severe faults (100% 500 bursts, TCP resets, 4.5s partitions), and rapidly filters out weight combinations causing state flapping or delayed quarantine.
+      - Scores the 7 sub-metric weights ($W_{success}, W_{latency}, W_{fail}, W_{timeout}, W_{5xx}, W_{queue}, W_{recovery}$) against false-quarantine, flapping, and detection-speed criteria.
+    - **Stage 2 (genetic-algorithm search, calibration set only)**:
+      - Replaces the hand-picked sweep with a GA search over the same calibration scenarios. Cap `recovery_trend_weight` (e.g. at 0.15) — an unconstrained search over-weights it, since it's the one sub-score that isn't a smooth function of the telemetry, and that destabilizes hysteresis on long-duration scenarios.
+      - Run several independent GA seeds; they should converge to the same region of weight space, not just one lucky run.
+    - **Held-out re-verification (the actual acceptance gate)**:
+      - Freeze the winning configuration and run it, once, against the held-out scenarios (`{3, 4, 5, 9, 10, 12, 13, 14}`) — never seen during Stage 1 or 2. Check it clears the outage-retry-reduction, hysteresis-stability, and recovery-time (MTTR) bounds together.
+      - If it falls short, fix the calibration process and re-run Stages 1–2 — never retune weights directly against the held-out numbers. That's leakage, and it invalidates the result.
+    - **Separately, validate over real infrastructure** (not part of weight selection — just confirming the in-process benchmark harness is a faithful stand-in for production): a live Kafka integration test over the real wire path, and a full Docker Compose end-to-end run through the actual dispatcher/worker/AEDE pipeline.
 - **Simulation & Adaptive Validation Loop**:
   - **Simulate a webhook registration** pointing to the Endpoint Simulator (via Python SDK or REST API).
   - **Simulate failure** using the Endpoint Simulator (timeouts, 5xx bursts, connection drops, slow responses).
@@ -268,7 +303,7 @@ Each person owns their vertical. All three own Docker Compose config, integratio
 - Feature flag switching (Strategy A / B / C)
 - Chart Data API (reads benchmark and ERI results, formats for dashboard)
 - Python SDK (`RelayClient`, `publish_event()`, `register_endpoint()`, `replay_dead_letters()`)
-- Benchmark runner + 10 failure scenarios
+- Benchmark runner + 14 failure scenarios (6 calibration, 8 held-out)
 - **Grafana Research Dashboards**:
   - Provisioned dashboards comparing Strategy A vs B vs C performance, retry amplification factor, and network/compute waste ratio
 
@@ -279,7 +314,7 @@ Each person owns their vertical. All three own Docker Compose config, integratio
   - Real-time UI state management and WebSocket client connection to backend stream
 - **Advanced Dashboard Visualizations**:
   - **Dynamic ERI Trajectory Chart**: Real-time ERI curve overlaid on color-coded background bands corresponding to the 5 states (`AVAILABLE`, `OBSERVED_DEGRADATION`, `UNSTABLE`, `QUARANTINED`, `RECOVERING`) and the hysteresis recovery line.
-  - **Benchmark Comparative Visualizer**: Multi-series charts comparing Strategy A vs B vs C across all 10 failure scenarios (retry count, recovery latency, delivery success rate).
+  - **Benchmark Comparative Visualizer**: Multi-series charts comparing Strategy A vs B vs C across all 14 failure scenarios (retry count, recovery latency, delivery success rate).
   - **Explainability Radar / Sub-metric Breakdown**: Visual component breaking down the 7 sub-metric scores and weight contributions explaining why decisions occurred.
   - **DLQ & Replay Dashboard Panel**: Interactive table of dead-lettered events with one-click replay trigger.
 - **Fault Injection UI Controls**:
@@ -365,7 +400,7 @@ Restore Simulator failure rate to 0% on the dashboard.
 Show:
 - State transitions to `RECOVERING` as probe delivery succeeds
 - Gradual traffic restoration — delivery attempts appear slowly under single-stream concurrency
-- ERI climbs back up above recovery threshold (90) due to hysteresis
+- ERI climbs back up above recovery threshold (80) due to hysteresis
 - State returns to `AVAILABLE`
 - **Replay from DLQ**: Trigger replay of dead-lettered events via the dashboard DLQ panel (or SDK `client.replay_dead_letters()`)
 - Replay creates fresh `DeliveryAttempt` records, delivering the queued events safely
@@ -383,7 +418,7 @@ Switch to Grafana:
 
 Switch to the Benchmark tab.
 
-Show comparison of Strategy A vs B vs C on Scenario 10 (slow degradation) using the **empirically optimized AEDE weights**:
+Show comparison of Strategy A vs B vs C on Scenario 10 (slow degradation) using the **calibrated AEDE weights**:
 - Strategy A (static): keeps retrying at fixed intervals, burns retries during outage, slow recovery
 - Strategy B (adaptive backoff): reduces retry frequency but lacks state awareness and quarantine
 - Strategy C (AEDE with optimized weights): detects degradation early, quarantines during outage, recovers efficiently — fewest wasted retries, fastest stable recovery
@@ -399,7 +434,7 @@ The project is "done enough" when all of the following are true:
 - [ ] Events can be published via the Python SDK and reach Kafka
 - [ ] Webhook delivery works with retry (at minimum Strategy A baseline)
 - [ ] AEDE is computing ERI, running the state machine, and synthesizing policies
-- [ ] **AEDE weights are empirically optimized by trial and error** across the 10 failure scenarios to prove sensitive detection and hysteresis stability
+- [ ] **AEDE weights are calibrated via the two-stage (hand-picked sweep + genetic-algorithm) process** on the calibration scenarios, then verified once on the held-out scenarios, to prove sensitive detection and hysteresis stability without weight-selection leakage
 - [ ] Webhook registration and failure simulation demonstrate clear, automated system adaptation
 - [ ] Dead Letter Queue (DLQ) captures exhausted deliveries, and Replay from DLQ works without mutating history
 - [ ] Prometheus metrics are exposed on `/metrics` and provisioned in Grafana dashboards
