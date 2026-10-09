@@ -132,3 +132,163 @@ def test_compute_eri_mixed_history(standard_weights):
     
     # Overall score should be appropriately weighted
     assert 0.0 < eri.score < 100.0
+
+
+def test_eri_weights_optimal_and_default():
+    """Verify ERIWeights.optimal() and default() return valid, normalized weights."""
+    opt = ERIWeights.optimal()
+    dflt = ERIWeights.default()
+
+    assert opt == dflt
+    assert opt.success_rate_weight == 0.374948
+    assert opt.latency_weight == 0.002808
+    assert opt.consecutive_failures_weight == 0.463822
+    assert opt.timeout_weight == 0.002808
+    assert opt.http_5xx_weight == 0.002808
+    assert opt.queue_depth_weight == 0.002808
+    assert opt.recovery_trend_weight == 0.149998
+
+    total = (
+        opt.success_rate_weight
+        + opt.latency_weight
+        + opt.consecutive_failures_weight
+        + opt.timeout_weight
+        + opt.http_5xx_weight
+        + opt.queue_depth_weight
+        + opt.recovery_trend_weight
+    )
+    assert abs(total - 1.0) < 1e-6
+
+
+def test_eri_score_clamp_bounds():
+    """Verify ERIScore before validator clamps floating-point inaccuracies near bounds."""
+    from relay.kernel.value_objects.eri import ERIScore
+
+    now = datetime.now(timezone.utc)
+    # 100.00000000000003 should be clamped to 100.0 without validation error
+    eri_top = ERIScore(
+        score=100.00000000000003,
+        success_rate_score=1.0,
+        latency_score=1.0,
+        consecutive_failure_score=1.0,
+        timeout_score=1.0,
+        http_5xx_score=1.0,
+        queue_depth_score=1.0,
+        recovery_trend_score=1.0,
+        window_size=10,
+        computed_at=now,
+    )
+    assert eri_top.score == 100.0
+
+    # -0.00000000000001 should be clamped to 0.0 without validation error
+    eri_bottom = ERIScore(
+        score=-0.00000000000001,
+        success_rate_score=0.0,
+        latency_score=0.0,
+        consecutive_failure_score=0.0,
+        timeout_score=0.0,
+        http_5xx_score=0.0,
+        queue_depth_score=0.0,
+        recovery_trend_score=0.0,
+        window_size=10,
+        computed_at=now,
+    )
+    assert eri_bottom.score == 0.0
+
+
+def test_compute_eri_window_duration_filters_stale(standard_weights):
+    """Verify window_duration_seconds filters out stale historical attempts."""
+    from datetime import timedelta
+
+    computed_at = datetime(2026, 9, 12, 12, 0, 0, tzinfo=timezone.utc)
+    # 5 stale failures from 10 minutes ago
+    stale_failures = [
+        MockTelemetry(
+            attempt_id=f"stale_{i}",
+            endpoint_id="ep_1",
+            succeeded=False,
+            http_status=500,
+            latency_ms=2000.0,
+            timed_out=False,
+            observed_at=computed_at - timedelta(seconds=600),
+        )
+        for i in range(5)
+    ]
+    # 5 fresh successes from 10 seconds ago
+    fresh_successes = [
+        MockTelemetry(
+            attempt_id=f"fresh_{i}",
+            endpoint_id="ep_1",
+            succeeded=True,
+            http_status=200,
+            latency_ms=50.0,
+            timed_out=False,
+            observed_at=computed_at - timedelta(seconds=10),
+        )
+        for i in range(5)
+    ]
+    all_attempts = stale_failures + fresh_successes
+
+    # Without window filtering: degraded by stale failures
+    eri_all = compute_eri(
+        attempts=all_attempts,
+        queue_depth=0,
+        weights=standard_weights,
+        baseline_latency_ms=100.0,
+        max_latency_ms=2000.0,
+        max_consecutive_failures=10,
+        max_queue_depth=1000,
+        computed_at=computed_at,
+    )
+    assert eri_all.window_size == 10
+    assert eri_all.score < 80.0
+
+    # With window_duration_seconds=60: only fresh successes remain
+    eri_filtered = compute_eri(
+        attempts=all_attempts,
+        queue_depth=0,
+        weights=standard_weights,
+        baseline_latency_ms=100.0,
+        max_latency_ms=2000.0,
+        max_consecutive_failures=10,
+        max_queue_depth=1000,
+        computed_at=computed_at,
+        window_duration_seconds=60.0,
+    )
+    assert eri_filtered.window_size == 5
+    assert eri_filtered.score == 100.0
+    assert eri_filtered.success_rate_score == 1.0
+
+
+def test_compute_eri_window_duration_all_expired(standard_weights):
+    """Verify compute_eri returns perfect score if all attempts are outside the time window."""
+    from datetime import timedelta
+
+    computed_at = datetime(2026, 9, 12, 12, 0, 0, tzinfo=timezone.utc)
+    stale_failures = [
+        MockTelemetry(
+            attempt_id=f"stale_{i}",
+            endpoint_id="ep_1",
+            succeeded=False,
+            http_status=503,
+            latency_ms=3000.0,
+            timed_out=True,
+            observed_at=computed_at - timedelta(seconds=300),
+        )
+        for i in range(5)
+    ]
+
+    eri = compute_eri(
+        attempts=stale_failures,
+        queue_depth=0,
+        weights=standard_weights,
+        baseline_latency_ms=100.0,
+        max_latency_ms=2000.0,
+        max_consecutive_failures=10,
+        max_queue_depth=1000,
+        computed_at=computed_at,
+        window_duration_seconds=30.0,
+    )
+    assert eri.window_size == 0
+    assert eri.score == 100.0
+
