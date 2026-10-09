@@ -271,3 +271,163 @@ def test_benchmark_results_with_data(client):
     assert runs[0]["strategy"] == "STRATEGY_C"
     assert runs[0]["total_events"] == 5000
     assert runs[0]["avg_recovery_time_seconds"] == 14.5
+
+
+@pytest.mark.asyncio
+async def test_aede_service_publishes_policy_evaluation():
+    import json
+    from relay.control_plane.aede.service import AEDEService
+    from relay.kernel.value_objects.telemetry import Telemetry
+    from relay.infrastructure.messaging.admin import EVENTS_INTERNAL_POLICY_TOPIC
+
+    published_messages = []
+
+    async def mock_publisher(topic: str, key: str, value: bytes):
+        published_messages.append((topic, key, value))
+
+    service = AEDEService(publisher=mock_publisher)
+    obs = Telemetry(
+        attempt_id="att-kafka-1",
+        endpoint_id="ep-kafka-test",
+        succeeded=True,
+        http_status=200,
+        latency_ms=45.0,
+        timed_out=False,
+        observed_at=datetime.now(timezone.utc),
+    )
+
+    eri, state, policy, record = await service.record_telemetry(obs)
+
+    assert len(published_messages) == 1
+    topic, key, payload_bytes = published_messages[0]
+    assert topic == EVENTS_INTERNAL_POLICY_TOPIC
+    assert key == "ep-kafka-test"
+
+    data = json.loads(payload_bytes.decode("utf-8"))
+    assert data["endpoint_id"] == "ep-kafka-test"
+    assert data["state"] == state.value
+    assert "eri_score" in data
+    assert "policy_evaluation" in data
+    assert "delivery_policy" in data
+    assert "explainability_record" in data
+    assert data["policy_evaluation"]["strategy_used"] == "STRATEGY_C"
+    assert data["policy_evaluation"]["policy_id"] == policy.policy_id
+    assert data["policy_evaluation"]["explainability_record_id"] == record.record_id
+
+
+@pytest.mark.asyncio
+async def test_aede_service_publish_failure_is_resilient():
+    from relay.control_plane.aede.service import AEDEService
+    from relay.kernel.value_objects.telemetry import Telemetry
+
+    async def failing_publisher(topic: str, key: str, value: bytes):
+        raise ConnectionError("Kafka cluster offline")
+
+    service = AEDEService(publisher=failing_publisher)
+    obs = Telemetry(
+        attempt_id="att-fail-1",
+        endpoint_id="ep-fail-test",
+        succeeded=True,
+        http_status=200,
+        latency_ms=60.0,
+        timed_out=False,
+        observed_at=datetime.now(timezone.utc),
+    )
+
+    # Must complete cleanly without raising exception
+    eri, state, policy, record = await service.record_telemetry(obs)
+    assert eri is not None
+    assert state == EndpointState.AVAILABLE
+
+
+def test_dashboard_ingests_policy_evaluation_into_state_store(client):
+    import json
+    from relay.kernel.value_objects.eri import ERIScore
+    from relay.kernel.entities.policy_evaluation import PolicyEvaluation
+    from relay.control_plane.explainability.record import ExplainabilityRecord
+
+    endpoint_id = "ep-ingest-test"
+    now = datetime.now(timezone.utc)
+    eri = ERIScore(
+        score=78.5,
+        success_rate_score=0.8,
+        latency_score=0.7,
+        consecutive_failure_score=1.0,
+        timeout_score=1.0,
+        http_5xx_score=1.0,
+        queue_depth_score=1.0,
+        recovery_trend_score=0.5,
+        computed_at=now,
+        window_size=25,
+    )
+    from relay.control_plane.aede.synthesizer import synthesize_policy
+    from relay.kernel.value_objects.endpoint_state import StateMachineThresholds
+
+    policy, rec = synthesize_policy(
+        endpoint_id=endpoint_id,
+        state_before=EndpointState.AVAILABLE,
+        state_after=EndpointState.OBSERVED_DEGRADATION,
+        eri=eri,
+        thresholds=StateMachineThresholds(
+            degradation_threshold=80.0,
+            degradation_recovery_threshold=90.0,
+            unstable_threshold=60.0,
+            unstable_recovery_threshold=70.0,
+            quarantine_threshold=30.0,
+            recovery_threshold=90.0,
+        ),
+        computed_at=now,
+    )
+    eval_ent = PolicyEvaluation(
+        evaluation_id="eval-ingest-1",
+        endpoint_id=endpoint_id,
+        policy_id=policy.policy_id,
+        explainability_record_id=rec.record_id,
+        eri_score=78.5,
+        state_before="AVAILABLE",
+        state_after="OBSERVED_DEGRADATION",
+        state_changed=True,
+        strategy_used="STRATEGY_C",
+        evaluated_at=now,
+        window_size=25,
+    )
+
+    bundle = {
+        "endpoint_id": endpoint_id,
+        "state": "OBSERVED_DEGRADATION",
+        "eri_score": eri.model_dump(mode="json"),
+        "policy_evaluation": eval_ent.model_dump(mode="json"),
+        "delivery_policy": policy.model_dump(mode="json"),
+        "explainability_record": rec.model_dump(mode="json"),
+    }
+
+    # Ingest directly as dashboard consumer does
+    state_store.record_evaluation(
+        endpoint_id=bundle["endpoint_id"],
+        state=EndpointState(bundle["state"]),
+        eri_score=ERIScore.model_validate(bundle["eri_score"]),
+        policy_evaluation=PolicyEvaluation.model_validate(bundle["policy_evaluation"]),
+        delivery_policy=DeliveryPolicy.model_validate(bundle["delivery_policy"]),
+        explainability_record=ExplainabilityRecord.model_validate(bundle["explainability_record"]),
+    )
+
+    # Verify chart endpoints expose this state accurately
+    res_state = client.get(f"/api/chart/endpoints/{endpoint_id}/state")
+    assert res_state.status_code == 200
+    assert res_state.json()["state"] == "OBSERVED_DEGRADATION"
+
+    res_eri = client.get(f"/api/chart/endpoints/{endpoint_id}/eri-history")
+    assert res_eri.status_code == 200
+    assert len(res_eri.json()["points"]) == 1
+    assert res_eri.json()["points"][0]["score"] == 78.5
+
+    res_pol = client.get(f"/api/chart/endpoints/{endpoint_id}/policy")
+    assert res_pol.status_code == 200
+    assert res_pol.json()["policy_id"] == policy.policy_id
+    assert res_pol.json()["strategy_used"] == "STRATEGY_C"
+
+    res_exp = client.get(f"/api/chart/endpoints/{endpoint_id}/explainability")
+    assert res_exp.status_code == 200
+    assert len(res_exp.json()["records"]) == 1
+    assert res_exp.json()["records"][0]["record_id"] == rec.record_id
+
