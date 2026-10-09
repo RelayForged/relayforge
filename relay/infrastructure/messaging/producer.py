@@ -19,12 +19,18 @@ EVENTS_BUSINESS_TOPIC = "events.business"
 
 _producer: Optional[AIOKafkaProducer] = None
 _producer_lock: Optional[asyncio.Lock] = None
+_producer_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
 def _get_producer_lock() -> asyncio.Lock:
-    global _producer_lock
-    if _producer_lock is None:
+    global _producer_lock, _producer_loop
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if _producer_lock is None or _producer_loop is not loop or (loop is not None and loop.is_closed()):
         _producer_lock = asyncio.Lock()
+        _producer_loop = loop
     return _producer_lock
 
 
@@ -42,10 +48,20 @@ async def _get_producer() -> AIOKafkaProducer:
     replication silently drops an event the API already accepted with 202.
     """
     global _producer
-    if _producer is not None:
+    loop = asyncio.get_running_loop()
+    if (
+        _producer is not None
+        and getattr(_producer, "_loop", None) is loop
+        and not loop.is_closed()
+    ):
         return _producer
+
     async with _get_producer_lock():
-        if _producer is None:
+        if (
+            _producer is None
+            or getattr(_producer, "_loop", None) is not loop
+            or loop.is_closed()
+        ):
             await ensure_topics()
             producer = AIOKafkaProducer(
                 bootstrap_servers=get_kafka_bootstrap_servers(),
@@ -75,3 +91,19 @@ async def close() -> None:
     if _producer is not None:
         await _producer.stop()
         _producer = None
+
+
+async def warmup() -> None:
+    """
+    Eagerly start the process-wide producer at application startup.
+
+    `_get_producer()` normally runs lazily on the first `publish()` call --
+    fine in principle, except topic admin checks (`ensure_topics()`) plus
+    `AIOKafkaProducer.start()`'s metadata bootstrap measured ~8s combined
+    against a real broker (4s each), cold. Callers with their own timeout
+    around a `publish()` call (e.g. AEDEService's record_telemetry) can
+    silently time out on exactly that first call if nothing warmed the
+    producer first. Call this once from the process's startup hook so the
+    ~8s cost is paid once, eagerly, well before any real event needs it.
+    """
+    await _get_producer()

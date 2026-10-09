@@ -32,6 +32,7 @@ from relay.kernel.policies.delivery_policy import DeliveryPolicy
 from relay.kernel.value_objects.telemetry import Telemetry
 
 if TYPE_CHECKING:
+    from relay.control_plane.aede.service import AEDEService
     from relay.data_plane.retry_manager.manager import RetryManager
 
 logger = logging.getLogger(__name__)
@@ -44,8 +45,12 @@ MAX_ERROR_MESSAGE_CHARS = 500
 
 
 def _default_timeout_seconds() -> float:
+    raw = os.environ.get("RELAY_WEBHOOK_TIMEOUT_SECONDS")
+    if raw is None:
+        return DEFAULT_TIMEOUT_SECONDS
     try:
-        return float(os.environ.get("WEBHOOK_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS))
+        val = float(raw)
+        return val if val > 0 else DEFAULT_TIMEOUT_SECONDS
     except ValueError:
         return DEFAULT_TIMEOUT_SECONDS
 
@@ -63,6 +68,7 @@ class WebhookWorker:
         telemetry: Optional[TelemetryRepository] = None,
         client: Optional[httpx.AsyncClient] = None,
         retry_manager: Optional["RetryManager"] = None,
+        aede_service: Optional["AEDEService"] = None,
     ) -> None:
         self._timeout = httpx.Timeout(
             timeout_seconds if timeout_seconds is not None else _default_timeout_seconds()
@@ -72,6 +78,7 @@ class WebhookWorker:
         self._client = client
         self._owns_client = client is None
         self._retry_manager = retry_manager
+        self._aede_service = aede_service
 
     async def execute(
         self,
@@ -157,6 +164,17 @@ class WebhookWorker:
             observed_at=completed_at,
         )
         await self._telemetry.save(observation)
+
+        if self._aede_service is not None:
+            try:
+                await self._aede_service.record_telemetry(observation)
+            except Exception:
+                logger.exception(
+                    "AEDEService telemetry feedback failed for attempt %s endpoint %s",
+                    attempt.attempt_id,
+                    endpoint_id,
+                )
+
         if (
             self._retry_manager is not None
             and delivery is not None
