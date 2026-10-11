@@ -5,6 +5,30 @@ Written against the code on `feature/research-contribution` at `1b4c32a`. Every 
 
 ---
 
+## 0. Status (2026-10-12, branch `feature/demo-backend`)
+
+| Item | State |
+|---|---|
+| 4.1 Live WebSocket feed | Done. Verified on the compose stack. |
+| 4.2 Simulator modes and scenario engine | Done. Presets run on the stack. |
+| 4.3 Restore path | Done. F5 reproduced, fixed, re-verified. See ADR 0020. |
+| 4.4 ReplayManager and DLQ | Done. Verified on the stack. See ADR 0021. |
+| 4.5 Benchmark API | Done. |
+| 4.6 HMAC signing surface | Done. Simulator logs `SIGNATURE VERIFIED`. |
+| 4.7 Delivery adapter | Done. |
+| 4.9 Multi-endpoint data | Done. |
+| 4.8 Metrics wiring | Not started. Needs Person A's `monitoring/metrics.py` and `prometheus_client`. |
+| 4.10 Typed events | Not started. Needs Person A's `kernel/events/base.py`. |
+
+Open points for Person B to decide:
+
+- ADR 0020 and ADR 0021 are marked Proposed.
+- The live restore path now differs from the benchmark's restore model (ADR 0020, Consequences).
+- `RECOVERING` lasts only until the first good probe, about 3 seconds on the stack. A visible probation needs a minimum sample count in the state machine.
+- `tests/integration/test_end_to_end_adaptation.py` is flaky: it drives the simulator at a 0.7 failure rate with an unseeded generator.
+
+---
+
 ## 1. Where the code differs from the source plan
 
 These change the size or shape of the work. Read them before the task list.
