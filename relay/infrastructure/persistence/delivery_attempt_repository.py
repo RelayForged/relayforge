@@ -21,8 +21,11 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from relay.infrastructure.persistence.engine import get_engine
-from relay.infrastructure.persistence.models import delivery_attempts_table
-from relay.kernel.entities.delivery import DeliveryAttempt
+from relay.infrastructure.persistence.models import (
+    deliveries_table,
+    delivery_attempts_table,
+)
+from relay.kernel.entities.delivery import Delivery, DeliveryAttempt
 
 
 def _to_attempt(row: Row) -> DeliveryAttempt:
@@ -151,3 +154,51 @@ class DeliveryAttemptRepository:
             rows = result.fetchall()
 
         return [_to_attempt(row) for row in rows]
+
+    async def list_recent_by_endpoint(
+        self, endpoint_id: str, limit: int = 30
+    ) -> list[tuple[Delivery, DeliveryAttempt]]:
+        """
+        Most recently completed attempts for an endpoint, newest first,
+        each with its parent Delivery. Read-only; feeds the dashboard
+        timeline. Attempts still in flight (a retry row is inserted at
+        schedule time with a future started_at) are excluded.
+        """
+        stmt = (
+            select(
+                delivery_attempts_table,
+                deliveries_table.c.event_id,
+                deliveries_table.c.subscription_id,
+                deliveries_table.c.endpoint_id,
+                deliveries_table.c.created_at,
+                deliveries_table.c.status,
+            )
+            .join(
+                deliveries_table,
+                deliveries_table.c.delivery_id == delivery_attempts_table.c.delivery_id,
+            )
+            .where(
+                deliveries_table.c.endpoint_id == endpoint_id,
+                delivery_attempts_table.c.completed_at.is_not(None),
+            )
+            .order_by(delivery_attempts_table.c.completed_at.desc())
+            .limit(limit)
+        )
+        async with self._engine.connect() as conn:
+            result = await conn.execute(stmt)
+            rows = result.fetchall()
+
+        return [
+            (
+                Delivery(
+                    delivery_id=row.delivery_id,
+                    event_id=row.event_id,
+                    subscription_id=row.subscription_id,
+                    endpoint_id=row.endpoint_id,
+                    created_at=row.created_at,
+                    status=row.status,
+                ),
+                _to_attempt(row),
+            )
+            for row in rows
+        ]

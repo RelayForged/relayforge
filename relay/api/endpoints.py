@@ -19,6 +19,19 @@ from relay.kernel.entities.endpoint import Endpoint
 router = APIRouter(tags=["endpoints"])
 
 
+async def publish_restore(endpoint_id: str) -> None:
+    """Ask the Control Plane to move a QUARANTINED endpoint to RECOVERING."""
+    payload = json.dumps({
+        "action": "restore",
+        "endpoint_id": endpoint_id,
+    }).encode("utf-8")
+    await publish(
+        EVENTS_INTERNAL_ENDPOINT_TOPIC,
+        key=endpoint_id,
+        value=payload,
+    )
+
+
 @router.post(
     "/endpoints",
     response_model=Endpoint,
@@ -86,17 +99,8 @@ async def restore_endpoint(
             detail="Not authorized to restore this endpoint",
         )
 
-    payload = json.dumps({
-        "action": "restore",
-        "endpoint_id": endpoint_id,
-    }).encode("utf-8")
-
     try:
-        await publish(
-            EVENTS_INTERNAL_ENDPOINT_TOPIC,
-            key=endpoint_id,
-            value=payload,
-        )
+        await publish_restore(endpoint_id)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

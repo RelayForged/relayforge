@@ -60,3 +60,53 @@ def test_zero_rate_always_succeeds():
 
     assert response.status_code == 200
     assert response.body == b"Webhook delivered successfully"
+
+def test_success_mode_ignores_rate():
+    config = SimulatorConfig(mode=FailureMode.SUCCESS, rate=1.0)
+
+    response = simulate_webhook(config)
+
+    assert response.status_code == 200
+
+
+def test_auth_failure_mode_returns_401():
+    config = SimulatorConfig(mode=FailureMode.AUTH_FAILURE, rate=1.0)
+
+    response = simulate_webhook(config)
+
+    assert response.status_code == 401
+    assert response.body == b"Simulated authentication failure"
+
+
+def test_mixed_mode_yields_errors_and_slow_successes():
+    config = SimulatorConfig(mode=FailureMode.MIXED, rate=1.0, latency_ms=0)
+
+    statuses = {simulate_webhook(config).status_code for _ in range(200)}
+
+    assert statuses == {200, 500}
+
+
+def test_connection_reset_mode_returns_reset_response():
+    from simulator.service import ConnectionResetResponse
+
+    config = SimulatorConfig(mode=FailureMode.CONNECTION_RESET, rate=1.0)
+
+    assert isinstance(simulate_webhook(config), ConnectionResetResponse)
+
+
+def test_connection_reset_falls_back_to_502_without_a_transport():
+    from fastapi.testclient import TestClient
+
+    from simulator.main import app, simulator_state
+
+    client = TestClient(app)
+    previous = simulator_state.config
+    try:
+        client.post(
+            "/simulator/config",
+            json={"mode": "connection_reset", "rate": 1.0},
+        )
+        assert client.get("/simulator/config").json()["mode"] == "connection_reset"
+        assert client.post("/webhook").status_code == 502
+    finally:
+        simulator_state.config = previous

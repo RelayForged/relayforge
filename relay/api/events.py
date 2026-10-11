@@ -19,6 +19,30 @@ from relay.kernel.value_objects.identifiers import CausationID, CorrelationID
 router = APIRouter(tags=["events"])
 
 
+def build_event(event_type: str, payload: dict) -> Event:
+    correlation_id = CorrelationID()
+    return Event(
+        correlation_id=correlation_id,
+        causation_id=CausationID(value=correlation_id.value),
+        event_type=event_type,
+        payload=payload,
+    )
+
+
+async def persist_and_publish(event: Event, repo: EventRepository) -> None:
+    """
+    The one ingest path: Postgres first, then Kafka. Shared by the HTTP
+    route and the demo auto-publisher so no caller can put an event on
+    the log that was never persisted.
+    """
+    await repo.save(event)
+    await publish(
+        EVENTS_BUSINESS_TOPIC,
+        key=event.event_id,
+        value=event.model_dump_json().encode("utf-8"),
+    )
+
+
 @router.post(
     "/events",
     response_model=IngestEventResponse,
@@ -29,13 +53,7 @@ async def ingest_event(
     _owner_id: str = Depends(require_owner),
     repo: EventRepository = Depends(get_event_repository),
 ) -> IngestEventResponse:
-    correlation_id = CorrelationID()
-    event = Event(
-        correlation_id=correlation_id,
-        causation_id=CausationID(value=correlation_id.value),
-        event_type=body.event_type,
-        payload=body.payload,
-    )
+    event = build_event(body.event_type, body.payload)
 
     await repo.save(event)
 

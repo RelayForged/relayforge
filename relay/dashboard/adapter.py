@@ -325,6 +325,89 @@ def get_policy_explanation(
     }
 
 
+SUB_SCORE_KEYS = (
+    "success_rate",
+    "latency",
+    "consecutive_failures",
+    "timeout_rate",
+    "http_5xx_rate",
+    "queue_depth",
+    "recovery_trend",
+)
+
+
+def get_eri_weights(weights: Any) -> dict[str, float]:
+    """ERI weights keyed like `eri_sub_scores`, so the frontend can pair them."""
+    return {
+        "success_rate": float(_get_value(weights, "success_rate_weight", default=0.0)),
+        "latency": float(_get_value(weights, "latency_weight", default=0.0)),
+        "consecutive_failures": float(
+            _get_value(weights, "consecutive_failures_weight", default=0.0)
+        ),
+        "timeout_rate": float(_get_value(weights, "timeout_weight", default=0.0)),
+        "http_5xx_rate": float(_get_value(weights, "http_5xx_weight", default=0.0)),
+        "queue_depth": float(_get_value(weights, "queue_depth_weight", default=0.0)),
+        "recovery_trend": float(
+            _get_value(weights, "recovery_trend_weight", default=0.0)
+        ),
+    }
+
+
+def build_live_state_update(
+    *,
+    endpoint_id: str | None,
+    store: Any,
+    weights: Any,
+    delivery_events: list[dict[str, Any]] | None = None,
+    history_limit: int = 60,
+) -> dict[str, Any]:
+    """
+    Build a state update from the live EndpointStateStore.
+
+    The store is filled from the Control Plane's policy evaluation events,
+    so everything here is what AEDE actually decided. Before the first
+    evaluation of an endpoint the update carries state UNKNOWN and an
+    empty history instead of invented values.
+    """
+    state = store.get_state(endpoint_id) if endpoint_id else None
+    history = store.get_eri_history(endpoint_id, limit=history_limit) if endpoint_id else []
+    evaluation = store.get_latest_evaluation(endpoint_id) if endpoint_id else None
+    policy = store.get_policy(evaluation.policy_id) if evaluation else None
+    records = store.get_explainability_records(endpoint_id, limit=1) if endpoint_id else []
+    explanation = records[-1] if records else None
+
+    latest = history[-1] if history else None
+    eri = float(latest.score) if latest else 0.0
+
+    update = build_state_update(
+        state=state.value if state else "UNKNOWN",
+        eri=eri,
+        eri_history=[
+            {
+                "timestamp": snapshot.computed_at,
+                "value": float(snapshot.score),
+                "state": snapshot.state,
+                "sub_scores": dict(snapshot.sub_scores),
+            }
+            for snapshot in history
+        ],
+        policy=policy,
+        explanation=explanation,
+    )
+    update["eri"] = eri
+    if not history:
+        update["eri_history"] = []
+    update["source"] = "live"
+    update["endpoint_id"] = endpoint_id
+    update["eri_sub_scores"] = (
+        dict(latest.sub_scores) if latest else {key: 0.0 for key in SUB_SCORE_KEYS}
+    )
+    update["eri_weights"] = get_eri_weights(weights)
+    update["thresholds"] = update["policy_explanation"].get("thresholds", {})
+    update["delivery_events"] = delivery_events or []
+    return update
+
+
 def build_state_update(
     *,
     state: Any,
