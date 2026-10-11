@@ -472,7 +472,7 @@ async def test_client_is_reused_across_attempts(attempts, telemetry):
     )
     event, delivery, _ = scenario()
 
-    first = worker._get_client()
+    first = worker._adapter._get_client()
     for number in (1, 2, 3):
         await worker.execute(
             DeliveryAttempt(
@@ -484,14 +484,14 @@ async def test_client_is_reused_across_attempts(attempts, telemetry):
             delivery=delivery,
         )
 
-    assert worker._get_client() is first
+    assert worker._adapter._get_client() is first
 
 
 async def test_injected_client_is_not_closed_by_aclose(attempts, telemetry):
     worker, _ = build(
         lambda r: httpx.Response(200), attempts=attempts, telemetry=telemetry
     )
-    client = worker._get_client()
+    client = worker._adapter._get_client()
 
     await worker.aclose()
 

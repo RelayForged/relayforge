@@ -5,20 +5,25 @@ POSTs the Event to `endpoint.target_url` (Simulator `POST /webhook`), then
 persists the completed DeliveryAttempt and a Telemetry observation. Does
 not schedule retries, compute backoff, or select a strategy.
 
+The send itself goes through an injected DeliveryAdapter
+(relay/kernel/interfaces/delivery_adapter.py). The Worker builds, signs
+and records; it does not know which transport carries the request.
+
 The Worker executes `policy.integrity_policy` mechanically; it never
 decides whether signing is required. Strategy A sets hmac_required=False,
 so signing is inert in Week 3-4 and becomes active the moment a policy
 turns it on.
 """
 import logging
-import os
 import secrets
 from datetime import datetime, timezone
 from time import perf_counter
 from typing import Optional, TYPE_CHECKING
 
-import httpx
-
+from relay.adapters.webhook.adapter import (
+    DEFAULT_TIMEOUT_SECONDS,
+    WebhookDeliveryAdapter,
+)
 from relay.infrastructure.auth.signing import (
     NONCE_HEADER,
     SIGNATURE_HEADER,
@@ -34,30 +39,25 @@ from relay.infrastructure.persistence.telemetry_repository import TelemetryRepos
 from relay.infrastructure.url_guard import UnsafeTargetURL, assert_deliverable
 from relay.kernel.entities.delivery import Delivery, DeliveryAttempt
 from relay.kernel.entities.event import Event
+from relay.kernel.interfaces.delivery_adapter import (
+    DeliveryAdapter,
+    DeliveryTimeout,
+    DeliveryTransportError,
+)
 from relay.kernel.policies.delivery_policy import DeliveryPolicy
 from relay.kernel.value_objects.telemetry import Telemetry
 
 if TYPE_CHECKING:
+    import httpx
+
     from relay.control_plane.aede.service import AEDEService
     from relay.data_plane.retry_manager.manager import RetryManager
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TIMEOUT_SECONDS = 5.0
 # error_message is persisted and surfaced through the dashboard adapter;
 # transport errors can embed the full target URL and resolved host.
 MAX_ERROR_MESSAGE_CHARS = 500
-
-
-def _default_timeout_seconds() -> float:
-    raw = os.environ.get("RELAY_WEBHOOK_TIMEOUT_SECONDS")
-    if raw is None:
-        return DEFAULT_TIMEOUT_SECONDS
-    try:
-        val = float(raw)
-        return val if val > 0 else DEFAULT_TIMEOUT_SECONDS
-    except ValueError:
-        return DEFAULT_TIMEOUT_SECONDS
 
 
 class SigningUnavailable(RuntimeError):
@@ -71,17 +71,19 @@ class WebhookWorker:
         timeout_seconds: Optional[float] = None,
         attempts: Optional[DeliveryAttemptRepository] = None,
         telemetry: Optional[TelemetryRepository] = None,
-        client: Optional[httpx.AsyncClient] = None,
+        client: Optional["httpx.AsyncClient"] = None,
+        adapter: Optional[DeliveryAdapter] = None,
         retry_manager: Optional["RetryManager"] = None,
         aede_service: Optional["AEDEService"] = None,
     ) -> None:
-        self._timeout = httpx.Timeout(
-            timeout_seconds if timeout_seconds is not None else _default_timeout_seconds()
+        # The Dispatcher injects the adapter. `timeout_seconds` and `client`
+        # remain for callers that predate it and configure the default
+        # webhook adapter; they are ignored when an adapter is given.
+        self._adapter: DeliveryAdapter = adapter or WebhookDeliveryAdapter(
+            timeout_seconds=timeout_seconds, client=client
         )
         self._attempts = attempts or DeliveryAttemptRepository()
         self._telemetry = telemetry or TelemetryRepository()
-        self._client = client
-        self._owns_client = client is None
         self._retry_manager = retry_manager
         self._aede_service = aede_service
 
@@ -120,21 +122,19 @@ class WebhookWorker:
             # hostname that was public then can point at link-local
             # metadata now (CWE-918, DNS rebinding).
             await assert_deliverable(target_url)
-            response = await self._post(target_url, body, headers)
+            response = await self._adapter.deliver(target_url, body, headers)
             http_status = response.status_code
             if not (200 <= http_status < 300):
                 error_message = f"HTTP {http_status}"
-        except httpx.TimeoutException:
+        except DeliveryTimeout:
             timed_out = True
             error_message = "client timeout"
         except UnsafeTargetURL as exc:
             error_message = f"blocked target: {exc}"
         except SigningUnavailable as exc:
             error_message = str(exc)
-        except (httpx.HTTPError, httpx.InvalidURL, httpx.CookieConflict) as exc:
-            # httpx.InvalidURL does not inherit from HTTPError, so it used
-            # to escape and take the Dispatcher down with it.
-            error_message = f"{type(exc).__name__}: {exc}"
+        except DeliveryTransportError as exc:
+            error_message = str(exc)
         except Exception as exc:  # noqa: BLE001 - see docstring
             logger.exception(
                 "Unexpected delivery error attempt_id=%s endpoint_id=%s",
@@ -241,33 +241,6 @@ class WebhookWorker:
         if nonce:
             headers[NONCE_HEADER] = nonce
 
-    async def _post(
-        self, target_url: str, body: bytes, headers: dict[str, str]
-    ) -> httpx.Response:
-        client = self._get_client()
-        return await client.post(target_url, content=body, headers=headers)
-
-    def _get_client(self) -> httpx.AsyncClient:
-        """
-        One pooled client for the process. Building an AsyncClient per
-        attempt meant a fresh connection and TLS handshake every delivery,
-        and that setup cost was being recorded as endpoint latency_ms.
-
-        Redirects stay disabled: following them is an SSRF bypass.
-        """
-        if self._client is None:
-            self._client = httpx.AsyncClient(
-                timeout=self._timeout,
-                follow_redirects=False,
-                limits=httpx.Limits(
-                    max_connections=100,
-                    max_keepalive_connections=20,
-                ),
-            )
-        return self._client
-
     async def aclose(self) -> None:
-        """Release the pooled client. Injected clients are left alone."""
-        if self._owns_client and self._client is not None:
-            await self._client.aclose()
-            self._client = None
+        """Release the adapter's resources."""
+        await self._adapter.aclose()

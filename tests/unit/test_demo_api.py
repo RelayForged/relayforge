@@ -83,7 +83,7 @@ def test_every_preset_uses_a_mode_the_simulator_accepts() -> None:
 
 
 def test_timeout_preset_outlasts_the_default_worker_timeout() -> None:
-    from relay.data_plane.workers.webhook import DEFAULT_TIMEOUT_SECONDS
+    from relay.adapters.webhook.adapter import DEFAULT_TIMEOUT_SECONDS
 
     latency_ms = demo.SCENARIOS["full_outage"].simulator.latency_ms
     assert latency_ms > DEFAULT_TIMEOUT_SECONDS * 1000

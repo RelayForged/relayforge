@@ -24,6 +24,7 @@ from typing import Optional
 
 from pydantic import ValidationError
 
+from relay.adapters.webhook.adapter import WebhookDeliveryAdapter
 from relay.control_plane.aede.service import AEDEService
 from relay.control_plane.aede.strategies import StrategyA, StrategyB, StrategyC
 from relay.data_plane.replay.manager import ReplayWork
@@ -132,6 +133,7 @@ class Dispatcher:
         self._aede_service = aede_service
 
         self._worker = worker or WebhookWorker(
+            adapter=WebhookDeliveryAdapter(),
             attempts=self._attempts,
             retry_manager=retries,
             aede_service=self._aede_service,
