@@ -4,6 +4,10 @@
 > Tier 1 architecture gaps so the codebase matches the claims in `arch.md`.
 > A person who has never seen the project must understand what is happening within 5 seconds
 > of watching each panel. Stubs must be code, not `.gitkeep`.
+>
+> **Revision (2026-10-12)**: status tables and task specs corrected after a code audit of
+> `feature/research-contribution`. Corrections are marked **[Audit]**. Person B's detailed
+> build plan, API contracts and open decisions are in `docs/sam_implementation_plan.md`.
 
 ---
 
@@ -19,7 +23,7 @@
 | Strategy A (static exponential backoff baseline) | `relay/control_plane/aede/strategies/static.py` | ✅ Done |
 | Strategy B (adaptive backoff, no state model, dynamic max_retries) | `relay/control_plane/aede/strategies/adaptive.py` | ✅ Done |
 | Strategy C (full AEDE adaptive policy) | wired via feature flags | ✅ Done |
-| Explainability records — every policy decision persisted to Postgres with thresholds, metrics, reason text | `relay/control_plane/explainability/record.py` | ✅ Done |
+| Explainability records — every policy decision recorded with thresholds, metrics, reason text | `relay/control_plane/explainability/record.py` | ⚠️ Records generated; **[Audit]** stored in memory only (`explainability_repo.py` has no Postgres implementation). Unassigned gap |
 | Two-stage ERI weight calibration (hand-picked sweep + genetic algorithm over 6 calibration scenarios, verified on 8 held-out scenarios) | `benchmark/genetic_optimizer.py`, `benchmark/optimize_weights.py` | ✅ Done |
 
 ### Benchmark & Evaluation (100% complete)
@@ -43,9 +47,9 @@
 | HMAC-SHA256 payload signing — code exists, activated by `hmac_required` in policy | `relay/data_plane/workers/webhook.py` | ✅ Done (not wired in docker-compose yet → T9) |
 | SSRF guard (blocks private IP targets in production) | `relay/infrastructure/url_guard.py` | ✅ Done |
 | Retry Manager (schedules future attempts from policy intervals) | `relay/data_plane/retry_manager/manager.py` | ✅ Done |
-| Dead Letter Queue routing (exhausted deliveries → `DEAD_LETTER` status in Postgres) | dispatcher + worker | ✅ Done |
+| Dead Letter Queue routing | dispatcher + retry manager | ⚠️ **[Audit]** Exhausted deliveries are marked `FAILED`; `DEAD_LETTER` is only set for a missing/inactive endpoint; deliveries skipped under PAUSE/QUARANTINE stay `PENDING` and are never re-dispatched → **T5** |
 | Three-tier policy fallback (AEDE live → Redis cache → Strategy A static defaults) | `relay/infrastructure/cache.py` + dispatcher | ✅ Done |
-| Redis policy cache with TTL | `relay/infrastructure/cache.py` | ✅ Done |
+| Policy cache with TTL | `relay/infrastructure/cache.py` | ⚠️ **[Audit]** In-memory implementation only; the dispatcher runs on `InMemoryPolicyCache`. No Redis-backed class exists. Unassigned gap |
 | Feature flags (`AEDE_ENABLED`, `ERI_ENABLED`, `STATE_MACHINE_ENABLED`, `STATIC_RETRY_MODE`, `ADAPTIVE_RETRY_MODE`) | `relay/infrastructure/feature_flags.py` | ✅ Done |
 | PostgreSQL repositories (Events, Endpoints, Subscriptions, Deliveries, Attempts, Telemetry, Explainability) | `relay/infrastructure/persistence/` | ✅ Done |
 | Alembic DB migrations | `alembic.ini` + `relay/infrastructure/persistence/migrations/` | ✅ Done |
@@ -55,16 +59,16 @@
 |---|---|---|
 | Docker Compose stack (Kafka, PostgreSQL, Redis, API, Dispatcher, Simulator, Dashboard) | `docker-compose.yml` | ✅ Done |
 | Multi-stage Dockerfile | `Dockerfile` | ✅ Done |
-| Endpoint Simulator (all 6 failure modes: http_error, timeout, slow, rate_limit, connection_reset, auth_failure) | `simulator/` | ✅ Done |
+| Endpoint Simulator | `simulator/` | ⚠️ **[Audit]** 4 modes exist (http_error, timeout, slow, rate_limit). `success`, `mixed`, `auth_failure`, `connection_reset` are missing → **T2** |
 | Prometheus & Grafana | — | ❌ Not in docker-compose → **T7** |
 | Kubernetes manifests | — | ❌ `deploy/k8s/` does not exist → **T10** |
 
 ### Dashboard (partially complete)
 | Component | Location | Status |
 |---|---|---|
-| WebSocket backend streaming live state updates | `relay/dashboard/main.py` | ✅ Done |
-| Chart Data API (endpoints, ERI history, policy, explainability, benchmark results) | `relay/api/chart/router.py` | ✅ Done |
-| React frontend — endpoint state badge, ERI line chart, delivery timeline, policy panel, explainability panel, fault injection controls | `relay/dashboard/frontend/src/App.jsx` | ✅ Basic done |
+| WebSocket backend streaming state updates | `relay/dashboard/websocket.py` | ⚠️ **[Audit]** Stream is synthetic (`DashboardDemoSource`), not fed by the real pipeline; `delivery_events` is always empty → **T3** |
+| Chart Data API (endpoints, ERI history, policy, explainability, benchmark results) | `relay/api/chart/router.py` | ✅ Done, except **[Audit]** benchmark results are always empty: the runner writes to a different store than the router reads → **T4** |
+| React frontend — endpoint state badge, ERI line chart, delivery timeline, policy panel, explainability panel, fault injection controls | `relay/dashboard/frontend/src/App.jsx` | ✅ Basic done. **[Audit]** WebSocket URL points at port 8000 (API); the dashboard is on 8090. No CORS on any backend. Nothing in compose serves the React build |
 | ERI chart threshold bands + hysteresis lines | — | ❌ → **T1** |
 | Scenario preset buttons | — | ❌ → **T2** |
 | Sub-metric radar chart | — | ❌ → **T3** |
@@ -166,6 +170,8 @@ Following the project governance defined in `docs/execution-plan.md` §C and the
 T1 → T2 → T3 → T5 → T4 → T6 → T9 → T7 → T10 → T11 → T8 → T12 → T13
 ```
 
+**[Audit]** Person B builds the backend half of T3 (live `/ws` feed) first: T1, T2, T6 and T11 all depend on it.
+
 Rationale:
 - **T1–T6**: Highest visual return for the live demo. B (Sam) builds backend contracts and hooks, unblocking C (Suhan) immediately.
 - **T9**: HMAC signing surface becomes visible in both the dashboard and live HTTP headers.
@@ -179,7 +185,8 @@ Rationale:
 ## T1 — ERI Chart with Threshold Bands & State Color Coding
 - **Primary Owner**: **Person C (Suhan)** (Frontend UI & Recharts)
 - **Support**: **Person B (Sam)** (Data contract validation)
-- **Demo impact**: Highest. No backend changes required. Pure frontend.
+- **Demo impact**: Highest.
+- **[Audit]** Not pure frontend: the `/ws` stream must first be rewired to live data (see T3). Band limits must come from the `thresholds` object in the WebSocket payload, not constants — the live thresholds are 75/95 (degradation), 55/85 (unstable), 80 (recovery) and 45 (quarantine, set in compose), not the 30/60/80/90 shown below.
 
 ### What to build
 Replace the plain `LineChart` with a `ComposedChart`:
@@ -195,7 +202,7 @@ Replace the plain `LineChart` with a `ComposedChart`:
 - **Three sparkline sub-charts** below the main ERI line: `success_rate`, `timeout_rate`, `consecutive_failures`.
 
 ### Division of Work
-- **Person B (Sam)**: Verify that `relay/dashboard/main.py`'s WebSocket stream includes `"state"` inside each `eri_history` item.
+- **Person B (Sam)**: Deliver `state`, `sub_scores` and `thresholds` in the live WebSocket payload (done as part of T3).
 - **Person C (Suhan)**: Implement `ComposedChart`, `ReferenceArea`, `ReferenceLine`, and CSS styles in `App.jsx` and `App.css`.
 
 ### Files
@@ -220,17 +227,26 @@ A prominent **"Demo Scenarios" control panel** with large labeled buttons. Each 
 | ▶ Normal | `{mode:"success", rate:0}` | ERI=100, AVAILABLE |
 | ⚠ Early Degradation | `{mode:"mixed", rate:0.4, latency_ms:300}` | ERI→72, OBSERVED_DEGRADATION |
 | 🔴 Instability | `{mode:"http_error", rate:0.75}` | ERI→42, UNSTABLE, backoff visible |
-| 💀 Full Outage | `{mode:"timeout", rate:1.0}` | ERI collapses, QUARANTINED, HTTP halts |
-| 🔄 Recovery | `{mode:"success", rate:0}` | RECOVERING probe, ERI climbs above 90 |
+| 💀 Full Outage | `{mode:"timeout", rate:1.0, latency_ms:3000}` | ERI collapses, QUARANTINED, HTTP halts |
+| 🔄 Recovery | `{mode:"success", rate:0}` + admin restore | RECOVERING probe, ERI climbs above the recovery threshold |
 | ⚡ Rate Limiting | `{mode:"rate_limit", rate:0.8}` | 429s → success_rate radar spike |
 | 🔑 Auth Failure | `{mode:"auth_failure", rate:1.0}` | HTTP 401, different ERI sub-metric pattern |
-| 📡 Network Partition | `{mode:"connection_reset", rate:1.0}` | Timeout sub-metric dominates ERI |
+| 📡 Network Partition | `{mode:"connection_reset", rate:1.0}` | Transport errors with no HTTP status. **[Audit]** These are not timeouts, so the timeout sub-metric will not dominate; set the label from what is observed |
+
+**[Audit] corrections**
+- Presets are defined on the server; the frontend sends only a scenario id (`normal`, `early_degradation`, `instability`, `full_outage`, `recovery`, `rate_limiting`, `auth_failure`, `network_partition`).
+- `timeout` mode only sleeps `latency_ms` and then returns 200, so the preset needs `latency_ms` above the worker timeout. Set `RELAY_WEBHOOK_TIMEOUT_SECONDS=2` on the dispatcher.
+- The API reaches the simulator over HTTP (`SIMULATOR_URL`). The demo endpoint and subscription must be created idempotently, or every restart doubles deliveries.
+- Auto-published events go through the same persist-then-publish path as `POST /events`.
+- The demo router is mounted only when `RELAY_DEMO_ENABLED=true`.
+- Additional endpoints: `GET /demo/scenarios`, `GET /demo/status`, `POST /demo/stop`.
 
 ### Division of Work
 - **Person B (Sam)**:
   - Create `relay/api/demo.py` with `POST /demo/scenario` (configures simulator, launches background event publishing task).
   - Include demo router in `relay/api/main.py`.
-  - Complete all 6 failure modes in `simulator/main.py` (rate_limit 429, auth_failure 401/403, connection_reset).
+  - Add the 4 missing simulator modes in `simulator/config.py` and `simulator/service.py` (`success`, `mixed`, `auth_failure` 401, `connection_reset`).
+  - Fix the restore path so the Recovery button works (see T11).
 - **Person C (Suhan)**:
   - Add scenario button grid to `relay/dashboard/frontend/src/App.jsx`.
   - Wire button click handlers to `fetch('/demo/scenario')`.
@@ -239,7 +255,10 @@ A prominent **"Demo Scenarios" control panel** with large labeled buttons. Each 
 ### Files
 - `relay/api/demo.py` — **NEW** (Person B)
 - `relay/api/main.py` — include demo router (Person B)
-- `simulator/main.py` — complete all 6 failure modes (Person B)
+- `simulator/config.py`, `simulator/service.py`, `simulator/main.py` — add missing failure modes (Person B)
+- `relay/api/events.py` — extract shared ingest helper (Person B, Person A review)
+- `relay/infrastructure/persistence/endpoint_repository.py` — lookup by owner + target URL (Person B, Person A review)
+- `docker-compose.yml` — `SIMULATOR_URL`, `DEMO_TARGET_URL`, `RELAY_DEMO_ENABLED`, `RELAY_WEBHOOK_TIMEOUT_SECONDS` (Person A)
 - `relay/dashboard/frontend/src/App.jsx` — scenario buttons UI (Person C)
 
 ---
@@ -268,14 +287,19 @@ Each axis shrinks toward center as that sub-metric degrades. During timeout faul
 
 ### Division of Work
 - **Person B (Sam)**:
-  - Modify `relay/dashboard/main.py` WebSocket broadcast to include `eri_sub_scores` dict inside the state update payload.
+  - **[Audit]** Rewire `/ws` from the synthetic `DashboardDemoSource` to the live `state_store` (fed from Kafka), keyed by `?endpoint_id=`. This is a prerequisite for T1, T2, T6 and T11.
+  - Add `eri_sub_scores`, `eri_weights`, `thresholds`, `endpoint_id` and `source` (`live` / `synthetic`) to the payload; add `state` and `sub_scores` to each `eri_history` point.
+  - Fill `delivery_events` from Postgres (read-only query of recent attempts).
+  - Keep the synthetic source only behind `DASHBOARD_SYNTHETIC_SOURCE=true`; no silent fallback.
+  - Add CORS middleware to the dashboard, API and simulator apps.
 - **Person C (Suhan)**:
   - Add Recharts `RadarChart`, `PolarGrid`, `PolarAngleAxis`, and `Radar` components in `App.jsx`.
   - Bind radar axes to live WebSocket `eri_sub_scores` values.
 
 ### Files
-- `relay/dashboard/main.py` — add `eri_sub_scores` to WS broadcast (Person B)
-- `relay/dashboard/frontend/src/App.jsx` — `RadarChart` UI component (Person C)
+- `relay/dashboard/websocket.py`, `adapter.py`, `models.py`, `main.py` — live WS feed (Person B)
+- `relay/infrastructure/persistence/delivery_attempt_repository.py` — `list_recent_by_endpoint()` (Person B)
+- `relay/dashboard/frontend/src/App.jsx` — `RadarChart` UI component; WebSocket URL to port 8090 (Person C)
 
 ---
 
@@ -298,16 +322,23 @@ A dedicated **"Benchmark" tab** in the dashboard with:
    ↑28% success rate     ↑12% success rate
    ↓65% MTTR             ↓22% MTTR
    ```
+   **[Audit]** The numbers above are placeholders. Measured on scenario 10 (seed 42): success rate is
+   0.6423 for A, B and C; wasted retries are 930 / 626 / 428; recovery time is 0 / 0 / 187 events
+   (A and B have no state machine). Cards must render the `comparison` object computed by the API.
+   Proposed headline metrics: wasted retries and total retry delay; no MTTR card unless recovery
+   time is defined for A and B.
 
 ### Division of Work
 - **Person B (Sam)**:
-  - Add `POST /benchmark/run` in `relay/api/chart/router.py` to invoke `benchmark/runner.py` in a background thread and populate `benchmark_store`.
+  - Add `POST /api/chart/benchmark/run` in `relay/api/chart/router.py`. All 8 held-out scenarios × 3 strategies run in under a second, so no background job is needed.
+  - **[Audit]** Bridge the two stores: `BenchmarkRunner` writes to `benchmark.metrics.benchmark_store`, the router reads `relay.api.chart.stores.benchmark_store`.
+  - Extend the run schema with success rate, wasted retries, recovery time, quarantine count and total delay.
   - Format scenario metric comparison JSON payloads.
 - **Person C (Suhan)**:
   - Implement Benchmark Tab, strategy run buttons, grouped bar chart, and KPI stat cards in `App.jsx`.
 
 ### Files
-- `relay/api/chart/router.py` — add `POST /benchmark/run` (Person B)
+- `relay/api/chart/router.py`, `schemas.py`, `stores.py` — `POST /benchmark/run`, extended run schema, store bridge (Person B)
 - `relay/dashboard/frontend/src/App.jsx` — Benchmark tab with GroupedBarChart (Person C)
 
 ---
@@ -322,12 +353,19 @@ A dedicated **"Benchmark" tab** in the dashboard with:
 `relay/data_plane/replay/` is an empty stub. `replay_dead_letters()` does not exist in SDK.
 The MVP checklist explicitly requires "Replay from DLQ works without mutating history".
 
+**[Audit] corrections**
+- The DLQ is defined as deliveries that are `FAILED`, `DEAD_LETTER`, or parked (`PENDING` with no attempt, skipped under PAUSE/QUARANTINE). A `DEAD_LETTER`-only query stays empty during an outage.
+- Republishing a dead event to `events.business` is a no-op: the delivery is unique on `(event_id, subscription_id)`, terminal deliveries return early, and attempt 1 is already claimed.
+- Replay design: the API-side `ReplayManager` publishes one request per delivery to a new topic `events.internal.replay`. The dispatcher handles it through the normal dispatch path, so AEDE still supplies the policy. A parked delivery is re-dispatched as is. A failed delivery gets a new Event (same type, payload and correlation id; causation id = original event id) dispatched to that one subscription, giving a new Delivery with attempt #1. Original rows are never modified.
+- Operator replay is gated by isolation action only (no HTTP under PAUSE/QUARANTINE). `replay_policy.allowed` is false in `AVAILABLE`, which is when the demo script replays.
+
 ### Division of Work
 - **Person B (Sam)**:
-  - Create `relay/data_plane/replay/manager.py` implementing `ReplayManager.replay_dead_letters()`: queries `DEAD_LETTER` attempts, generates new immutable `DeliveryAttempt` with attempt #1, republishes to `events.business`.
+  - Create `relay/data_plane/replay/manager.py` implementing `ReplayManager.replay_dead_letters()`: selects DLQ deliveries and publishes replay requests to `events.internal.replay`.
+  - Add the topic to `PLATFORM_TOPICS` and a replay handler in `relay/data_plane/dispatcher/main.py` (offset committed only after the work is persisted).
   - Add `POST /replay` in `relay/api/endpoints.py`.
-  - Add `GET /dlq` in `relay/api/chart/router.py`.
-  - Add `get_dead_letters()` in `relay/infrastructure/persistence/delivery_attempt_repository.py`.
+  - Add `GET /api/chart/dlq` in `relay/api/chart/router.py`.
+  - Add `get_dead_letters()` in `relay/infrastructure/persistence/delivery_repository.py` (status lives on deliveries, not attempts); excludes deliveries already replayed.
   - Add `replay_dead_letters()` to `relay/sdk/client.py`.
 - **Person C (Suhan)**:
   - Build interactive DLQ panel in `relay/dashboard/frontend/src/App.jsx`.
@@ -339,7 +377,9 @@ The MVP checklist explicitly requires "Replay from DLQ works without mutating hi
 - `relay/api/endpoints.py` — add `POST /replay` (Person B)
 - `relay/api/chart/router.py` — add `GET /dlq` (Person B)
 - `relay/sdk/client.py` — add `replay_dead_letters()` (Person B)
-- `relay/infrastructure/persistence/delivery_attempt_repository.py` — add `get_dead_letters()` (Person B)
+- `relay/infrastructure/persistence/delivery_repository.py` — add `get_dead_letters()` (Person B, Person A review)
+- `relay/infrastructure/messaging/admin.py` — add `events.internal.replay` topic (Person B, Person A review)
+- `relay/data_plane/dispatcher/main.py` — replay handler (Person B)
 - `relay/dashboard/frontend/src/App.jsx` — DLQ table and replay triggers (Person C)
 
 ---
@@ -384,6 +424,11 @@ A **"State History" panel** showing:
 3. **Docker Compose**: Add `prometheus:v2.51.0` and `grafana:10.4.0` containers.
 4. **Provisioned Grafana dashboard**: `deploy/grafana/dashboards/relay.json`.
 
+**[Audit] corrections**
+- `prometheus_client` is not yet a dependency in `pyproject.toml`.
+- Worker and AEDE metrics are emitted in the dispatcher process, which has no HTTP server. The dispatcher needs its own metrics port and a Prometheus scrape target; the API's `/metrics` will not show them.
+- `ENDPOINT_STATE` as a Gauge labelled `[endpoint_id, from_state, to_state]` cannot express transitions. Use a transition Counter plus a current-state Gauge.
+
 ### Division of Work
 - **Person A**:
   - Implement `relay/infrastructure/monitoring/metrics.py`.
@@ -393,6 +438,7 @@ A **"State History" panel** showing:
 - **Person B (Sam)**:
   - Wire metric emissions into `relay/data_plane/workers/webhook.py` (attempts, retry histograms).
   - Wire metric emissions into `relay/control_plane/aede/service.py` (ERI gauge, state transitions).
+  - Start the metrics exporter in `relay/data_plane/dispatcher/main.py`.
   - Construct `deploy/grafana/dashboards/relay.json` with live gauges, retry histograms, and state event markers.
 
 ### Files
@@ -419,10 +465,11 @@ A **"Multi-Endpoint" tab** in the dashboard comparing:
 - Visualizing how Strategy A starves Endpoint B due to worker exhaustion, while Strategy C (AEDE) isolates A and preserves 100% throughput for B.
 
 ### Division of Work
-- **Person B (Sam)**: Extract results from `benchmark/multi_endpoint.py` into chart store format.
+- **Person B (Sam)**: Add `GET /api/chart/benchmark/multi-endpoint` returning the results of `benchmark/multi_endpoint.py`. Measured for the healthy neighbor: throughput 1.39 / 1.98 / 16.58 events/s and mean queue wait 52.7 s / 39.3 s / 4.0 s for A / B / C.
 - **Person C (Suhan)**: Build side-by-side throughput bars and isolation badges in `App.jsx`.
 
 ### Files
+- `relay/api/chart/router.py`, `schemas.py` — multi-endpoint endpoint (Person B)
 - `relay/dashboard/frontend/src/App.jsx` — Multi-Endpoint tab component (Person C)
 
 ---
@@ -439,11 +486,16 @@ A **"Multi-Endpoint" tab** in the dashboard comparing:
 4. Simulator webhook receiver verifies incoming signatures and logs `"SIGNATURE VERIFIED"`.
 5. Dashboard timeline displays `X-Relay-Signature: sha256=...` badge.
 
+**[Audit] corrections**
+- The synthesizer must not read the environment: that is a hidden input to a function that must be deterministic. `hmac_required` is read once at process start and passed to `synthesize_policy` as an explicit parameter. Strategies A and B and the Tier 3 fallback take the same parameter so signing survives fallback.
+- Attempts do not store request headers, so the badge has no data source in Postgres. The simulator keeps a ring buffer of received requests with the verification result at `GET /simulator/deliveries`; the frontend joins on `attempt_id`.
+- The simulator container also needs `RELAY_WEBHOOK_SIGNING_SECRET`.
+
 ### Division of Work
 - **Person B (Sam)**:
   - Create `relay/infrastructure/auth/signing.py` and `relay/infrastructure/auth/__init__.py`.
   - Refactor `relay/data_plane/workers/webhook.py` to import from `auth.signing`.
-  - Update `relay/control_plane/aede/synthesizer.py` to read `RELAY_HMAC_REQUIRED`.
+  - Add an `hmac_required` parameter to `synthesize_policy`, set from config in `AEDEService` and the strategies.
   - Update `simulator/main.py` to verify signatures and log verification.
 - **Person A**: Add signing secret env vars to `docker-compose.yml`.
 - **Person C (Suhan)**: Display signature badge in `App.jsx` timeline rows.
@@ -452,7 +504,7 @@ A **"Multi-Endpoint" tab** in the dashboard comparing:
 - `relay/infrastructure/auth/signing.py` — **NEW** (Person B)
 - `relay/infrastructure/auth/__init__.py` — export signing helpers (Person B)
 - `relay/data_plane/workers/webhook.py` — refactor import (Person B)
-- `relay/control_plane/aede/synthesizer.py` — read HMAC flag (Person B)
+- `relay/control_plane/aede/synthesizer.py`, `service.py`, `strategies/*.py` — `hmac_required` parameter (Person B)
 - `simulator/main.py` — signature verification hook (Person B)
 - `docker-compose.yml` — signing env vars (Person A)
 - `relay/dashboard/frontend/src/App.jsx` — show signature header (Person C)
@@ -513,6 +565,7 @@ deploy/
 ### Division of Work
 - **Person C (Suhan)**: Build `alerts[]` state, toast notification stack, banner, and restore action hook in `App.jsx` and `App.css`.
 - **Person B (Sam)**: Ensure backend `POST /endpoints/{id}/restore` publishes state transition event that clears the alert.
+  - **[Audit]** Today it does not. Restore only flips in-memory state: no policy event is published, and the cached QUARANTINE policy keeps being served and re-cached, so delivery is unlikely to resume. Suspected from code reading; the only passing demo run used mocks. Reproduce on the compose stack, then fix in `relay/control_plane/aede/service.py` and `relay/data_plane/dispatcher/main.py`: replace the cached policy, save an explainability record, publish a policy evaluation event.
 
 ### Files
 - `relay/dashboard/frontend/src/App.jsx` — alert toast & banner components (Person C)
@@ -526,7 +579,7 @@ deploy/
 - **Closes**: `relay/adapters/webhook/` empty stub. Architecture correctness.
 
 ### What to build
-1. Formalize `DeliveryAdapter` protocol in `relay/kernel/interfaces/delivery_adapter.py`.
+1. Formalize `DeliveryAdapter` protocol in `relay/kernel/interfaces/delivery_adapter.py` (**[Audit]** new file; it does not exist yet). No `httpx` types in the kernel.
 2. Extract HTTP dispatch from `WebhookWorker._post()` into `relay/adapters/webhook/adapter.py`.
 3. Inject `DeliveryAdapter` into `WebhookWorker` constructor.
 
@@ -539,7 +592,7 @@ deploy/
 - **Person A**: Review interface separation.
 
 ### Files
-- `relay/kernel/interfaces/delivery_adapter.py` — add Protocol (Person B)
+- `relay/kernel/interfaces/delivery_adapter.py` — **NEW** Protocol (Person B)
 - `relay/adapters/webhook/adapter.py` — **NEW** (Person B)
 - `relay/data_plane/workers/webhook.py` — inject adapter (Person B)
 - `relay/data_plane/dispatcher/main.py` — wire adapter (Person B)
@@ -584,24 +637,28 @@ relay/kernel/events/
 | `relay/api/endpoints.py` | Add `POST /replay` | T5 | **Person B (Sam)** |
 | `relay/data_plane/replay/manager.py` | **NEW** — ReplayManager | T5 | **Person B (Sam)** |
 | `relay/sdk/client.py` | Add `replay_dead_letters()` | T5 | **Person B (Sam)** |
-| `relay/infrastructure/persistence/delivery_attempt_repository.py` | Add `get_dead_letters()` | T5 | **Person B (Sam)** |
-| `relay/dashboard/main.py` | Add `eri_sub_scores` + `state` in WS broadcast | T3 | **Person B (Sam)** |
+| `relay/infrastructure/persistence/delivery_attempt_repository.py` | Add `list_recent_by_endpoint()` for the timeline | T3 | **Person B (Sam)** |
+| `relay/dashboard/websocket.py`, `adapter.py`, `models.py`, `main.py` | Rewire `/ws` to live `state_store`; add sub-scores, thresholds, delivery events; CORS | T3 | **Person B (Sam)** |
+| `relay/infrastructure/persistence/delivery_repository.py` | Add `get_dead_letters()` | T5 | **Person B (Sam)** |
+| `relay/infrastructure/messaging/admin.py` | Add `events.internal.replay` topic | T5 | **Person B (Sam)** |
+| `simulator/config.py`, `simulator/service.py` | Add `success`, `mixed`, `auth_failure`, `connection_reset` modes | T2 | **Person B (Sam)** |
+| `relay/api/chart/schemas.py`, `stores.py` | Extended benchmark run schema, store bridge, multi-endpoint schema | T4, T8 | **Person B (Sam)** |
 | `relay/infrastructure/monitoring/metrics.py` | **NEW** — Prometheus metrics | T7 | **Person A** |
 | `relay/data_plane/workers/webhook.py` | Emit metrics; import auth.signing; inject adapter | T7, T9, T12 | **Person B (Sam)** |
-| `relay/control_plane/aede/service.py` | Emit ERI + state metrics | T7 | **Person B (Sam)** |
+| `relay/control_plane/aede/service.py` | Emit ERI + state metrics; fix restore path; pass `hmac_required` | T7, T9, T11 | **Person B (Sam)** |
 | `relay/infrastructure/auth/signing.py` | **NEW** — signing helpers | T9 | **Person B (Sam)** |
 | `relay/infrastructure/auth/__init__.py` | Export signing helpers | T9 | **Person B (Sam)** |
-| `relay/control_plane/aede/synthesizer.py` | Read `RELAY_HMAC_REQUIRED` env flag | T9 | **Person B (Sam)** |
-| `docker-compose.yml` | Add prometheus, grafana, signing env vars | T7, T9 | **Person A** |
+| `relay/control_plane/aede/synthesizer.py` | Accept `hmac_required` as an explicit parameter | T9 | **Person B (Sam)** |
+| `docker-compose.yml` | Add prometheus, grafana, signing env vars, demo env vars, worker timeout, dispatcher metrics port, CORS origins | T2, T7, T9 | **Person A** |
 | `deploy/prometheus.yml` | **NEW** | T7 | **Person A** |
 | `deploy/grafana/provisioning/datasources/prometheus.yml` | **NEW** | T7 | **Person A** |
 | `deploy/grafana/dashboards/relay.json` | **NEW** | T7 | **Person B (Sam)** |
 | `deploy/k8s/*.yaml` | **NEW** (~15 files) | T10 | **Person A** |
 | `deploy/README-k8s.md` | **NEW** | T10 | **Person A** |
-| `simulator/main.py` | All 6 failure modes; signature verification | T2, T9 | **Person B (Sam)** |
-| `relay/kernel/interfaces/delivery_adapter.py` | Add `DeliveryAdapter` Protocol | T12 | **Person B (Sam)** |
+| `simulator/main.py` | Config read endpoint; signature verification; received-request ring buffer | T2, T9 | **Person B (Sam)** |
+| `relay/kernel/interfaces/delivery_adapter.py` | **NEW** — `DeliveryAdapter` Protocol | T12 | **Person B (Sam)** |
 | `relay/adapters/webhook/adapter.py` | **NEW** (moved HTTP from webhook.py) | T12 | **Person B (Sam)** |
-| `relay/data_plane/dispatcher/main.py` | Inject WebhookDeliveryAdapter | T12 | **Person B (Sam)** |
+| `relay/data_plane/dispatcher/main.py` | Inject WebhookDeliveryAdapter; replay handler; restore fix; metrics exporter | T5, T7, T11, T12 | **Person B (Sam)** |
 | `relay/kernel/events/*.py` | **NEW** — 6 typed event model files | T13 | **Person A** & **Person B (Sam)** |
 
 ---
@@ -612,25 +669,26 @@ relay/kernel/events/
         PERSON B (Sam)                PERSON C (Suhan)              PERSON A
         [Cross-Domain Engine]         [Dashboard Frontend]          [Infra & Core]
 ───────────────────────────────────────────────────────────────────────────────────────
-Day 1:  • Verify WS payload contract   • T1: ComposedChart with     • T13: Draft typed event
-          for ERI & state               bands & hysteresis lines      base models in kernel
-        • T2: Build relay/api/demo.py
-          & simulator failure modes
+Day 1:  • Publish WS + REST contracts  • T1: ComposedChart with     • T13: Draft typed event
+        • T3: Rewire /ws to live        bands & hysteresis lines      base models in kernel
+          state_store
+        • Reproduce restore bug (T11)
+        • T2: Simulator failure modes
 
-Day 2:  • T3: Serialize eri_sub_scores • T2: Build Scenario Preset  • T7: Implement
-          into WebSocket stream         buttons in App.jsx            monitoring/metrics.py
-        • T5: Build ReplayManager &    • T3: Implement Recharts       & Prometheus scrape
-          POST /replay, GET /dlq        RadarChart                    config
+Day 2:  • T2: Build relay/api/demo.py  • T2: Build Scenario Preset  • T7: Implement
+          scenario engine               buttons in App.jsx            monitoring/metrics.py
+        • T11: Fix restore path        • T3: Implement Recharts       & Prometheus scrape
+        • T5: Start ReplayManager       RadarChart                    config
 
-Day 3:  • T4: Add /benchmark/run       • T5: Build DLQ table &      • T7: Configure
-          endpoint in chart router      replay action buttons         Prometheus & Grafana
-        • T9: Extract auth/signing.py  • T4: Build Benchmark tab      in docker-compose.yml
-          & wire HMAC policy flag       grouped bar chart UI
+Day 3:  • T5: Finish replay topic,     • T5: Build DLQ table &      • T7: Configure
+          POST /replay, GET /dlq        replay action buttons         Prometheus & Grafana
+        • T4: Add /benchmark/run       • T4: Build Benchmark tab      in docker-compose.yml
+          & bridge benchmark stores     grouped bar chart UI
 
-Day 4:  • T12: Formalize               • T6: Implement State        • T10: Begin Kubernetes
-          DeliveryAdapter interface     Transition Journal            manifests (namespace,
-        • Verify /restore hook for     • T11: Build Quarantine        configmap, secrets,
-          alert dismissals              toast alerts & banner         statefulsets)
+Day 4:  • T9: Extract auth/signing.py  • T6: Implement State        • T10: Begin Kubernetes
+          & wire HMAC policy flag       Transition Journal            manifests (namespace,
+        • T12: Formalize               • T11: Build Quarantine        configmap, secrets,
+          DeliveryAdapter interface     toast alerts & banner         statefulsets)
 
 Day 5:  • T7: Wire metrics in worker   • T8: Build Multi-Endpoint   • T10: Write API,
           & AEDEService; construct      comparative view              Dispatcher & Dashboard
@@ -662,8 +720,8 @@ Day 8:  • Buffer: End-to-end rehearsal, edge-case fixes, and timing optimizati
 | 6:30 | Click **🔄 Recovery** | **Person C** | RECOVERING probe → ERI climbs above 90 hysteresis line → AVAILABLE |
 | 7:00 | Click **[Replay All]** in DLQ panel | **Person B** | Events requeue, Timeline shows replayed deliveries succeeding |
 | 7:30 | Switch to Grafana tab | **Person A** | Real-time ERI gauge, retry histogram, state transition markers |
-| 8:00 | Switch to Benchmark tab | **Person B** | Click "Run Scenario 10 — all strategies" → grouped bar chart renders: C wins on all metrics |
-| 9:00 | Switch to Multi-Endpoint tab | **Person B** | Show throughput bars: A starved under Strategy A, unaffected under Strategy C |
+| 8:00 | Switch to Benchmark tab | **Person B** | Click "Run Scenario 10 — all strategies" → grouped bar chart renders: C cuts wasted retries (428 vs 930 for A and 626 for B); success rate is equal across strategies |
+| 9:00 | Switch to Multi-Endpoint tab | **Person B** | Show throughput bars: the healthy neighbor is starved under Strategy A (1.39 events/s) and protected under Strategy C (16.58 events/s) |
 | 9:30 | Show State Journal panel | **Person C** | Full journey scrollable: AVAILABLE → DEGRADED → UNSTABLE → QUARANTINED → RECOVERING → AVAILABLE |
 
 ---
