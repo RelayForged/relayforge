@@ -8,6 +8,7 @@ from relay.sdk.models import (
     EndpointResponse,
     EventDetail,
     EventResponse,
+    ReplayResponse,
     SubscriptionResponse,
 )
 
@@ -19,5 +20,6 @@ __all__ = [
     "EventResponse",
     "EventDetail",
     "EndpointResponse",
+    "ReplayResponse",
     "SubscriptionResponse",
 ]

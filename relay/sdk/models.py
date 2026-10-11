@@ -42,3 +42,11 @@ class SubscriptionResponse:
     event_types: List[str]
     created_at: str
     status: str
+
+
+@dataclass(frozen=True)
+class ReplayResponse:
+    """Returned by replay_dead_letters() upon 202 Accepted."""
+    replay_id: str
+    requested: int
+    skipped: List[Dict[str, Any]]

@@ -18,7 +18,13 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from relay.sdk.exceptions import RelayAPIError, RelayConnectionError
-from relay.sdk.models import EndpointResponse, EventDetail, EventResponse, SubscriptionResponse
+from relay.sdk.models import (
+    EndpointResponse,
+    EventDetail,
+    EventResponse,
+    ReplayResponse,
+    SubscriptionResponse,
+)
 
 
 class RelayClient:
@@ -209,6 +215,47 @@ class RelayClient:
             event_types=data["event_types"],
             created_at=str(data.get("created_at", "")),
             status=data.get("status", "ACTIVE"),
+        )
+
+    def replay_dead_letters(
+        self,
+        endpoint_id: Optional[str] = None,
+        delivery_ids: Optional[List[str]] = None,
+        limit: int = 50,
+    ) -> ReplayResponse:
+        """Request replay of failed, dead-lettered or parked deliveries.
+
+        Replay never rewrites history: each replayed delivery is a new
+        attempt chain, and the original records stay as they were.
+
+        Args:
+            endpoint_id: Replay only this endpoint's dead letters.
+            delivery_ids: Replay only these deliveries.
+            limit: Maximum number of deliveries to replay (oldest first).
+
+        Returns:
+            ReplayResponse with the replay id, how many were requested, and
+            any deliveries that were skipped with the reason.
+
+        Raises:
+            RelayAPIError: If the endpoint is unknown (404) or the request fails.
+            RelayConnectionError: If unable to reach the API.
+        """
+        body: Dict[str, Any] = {"limit": limit}
+        if endpoint_id is not None:
+            body["endpoint_id"] = endpoint_id
+        if delivery_ids is not None:
+            body["delivery_ids"] = delivery_ids
+        data = self._request(
+            method="POST",
+            path="/replay",
+            json_body=body,
+            expected_status=202,
+        )
+        return ReplayResponse(
+            replay_id=data["replay_id"],
+            requested=data["requested"],
+            skipped=data.get("skipped", []),
         )
 
     def close(self) -> None:

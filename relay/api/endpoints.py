@@ -5,11 +5,19 @@ Endpoint registration.
 ever reaches a repository, and `owner_id` is taken from the authenticated
 principal instead of the request body so ownership cannot be spoofed.
 """
+from datetime import datetime, timezone
 import json
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from relay.api.deps import get_endpoint_repository
-from relay.api.schemas import CreateEndpointRequest, RestoreEndpointResponse
+from relay.api.deps import get_endpoint_repository, get_replay_manager
+from relay.api.schemas import (
+    CreateEndpointRequest,
+    ReplayRequest,
+    ReplayResponse,
+    RestoreEndpointResponse,
+    SkippedReplayResponse,
+)
+from relay.data_plane.replay.manager import ReplayManager
 from relay.api.security import DEV_OWNER_ID, require_owner
 from relay.infrastructure.messaging.admin import EVENTS_INTERNAL_ENDPOINT_TOPIC
 from relay.infrastructure.messaging.producer import publish
@@ -116,3 +124,65 @@ async def restore_endpoint(
         target_state="RECOVERING",
     )
 
+
+
+@router.post(
+    "/replay",
+    response_model=ReplayResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def replay_dead_letters(
+    body: ReplayRequest,
+    owner_id: str = Depends(require_owner),
+    repo: EndpointRepository = Depends(get_endpoint_repository),
+    replays: ReplayManager = Depends(get_replay_manager),
+) -> ReplayResponse:
+    """
+    Request replay of dead letters. Accepted, not completed: each one is
+    dispatched by the Dispatcher under the endpoint's current policy, so
+    a still-quarantined endpoint parks it again rather than receiving it.
+    """
+    if body.endpoint_id is None:
+        # Without an endpoint there is nothing to check ownership against.
+        if owner_id != DEV_OWNER_ID:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="endpoint_id is required",
+            )
+    else:
+        endpoint = await repo.get_by_id(body.endpoint_id)
+        if endpoint is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Endpoint {body.endpoint_id} not found",
+            )
+        if owner_id != DEV_OWNER_ID and endpoint.owner_id != owner_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Not authorized to replay deliveries for this endpoint",
+            )
+
+    try:
+        result = await replays.replay_dead_letters(
+            now=datetime.now(timezone.utc),
+            endpoint_id=body.endpoint_id,
+            delivery_ids=body.delivery_ids,
+            limit=body.limit,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "message": "Replay request failed part-way; it is safe to send again.",
+                "endpoint_id": body.endpoint_id,
+            },
+        ) from exc
+
+    return ReplayResponse(
+        replay_id=result.replay_id,
+        requested=result.requested,
+        skipped=[
+            SkippedReplayResponse(delivery_id=s.delivery_id, why=s.why)
+            for s in result.skipped
+        ],
+    )
