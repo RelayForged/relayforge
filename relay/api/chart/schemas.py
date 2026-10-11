@@ -78,6 +78,13 @@ class BenchmarkRunResponse(BaseModel):
     avg_recovery_time_seconds: float
     started_at: str
     finished_at: str
+    scenario_id: Optional[int] = None
+    seed: Optional[int] = None
+    delivery_success_rate: Optional[float] = None
+    total_wasted_retries: Optional[int] = None
+    recovery_time_events: Optional[int] = None
+    quarantine_count: Optional[int] = None
+    total_delay_seconds: Optional[float] = None
 
 
 class BenchmarkResultsResponse(BaseModel):
@@ -113,3 +120,58 @@ class DeadLetterItem(BaseModel):
 class DeadLetterListResponse(BaseModel):
     """Dead letters for the DLQ panel, oldest first."""
     items: List[DeadLetterItem] = Field(default_factory=list)
+
+
+class BenchmarkRunRequest(BaseModel):
+    """Which simulated experiments to run. Defaults to the held-out evaluation set."""
+    scenario_ids: Optional[List[int]] = None
+    strategies: Optional[List[str]] = None
+    seed: int = 42
+
+
+class MetricComparison(BaseModel):
+    """One metric for Strategy C against a baseline, summed over the scenarios run."""
+    strategy_c: float
+    baseline: float
+    # Relative change of C against the baseline, in percent. None when the
+    # baseline is zero and a percentage would be meaningless.
+    pct_change: Optional[float] = None
+
+
+class StrategyComparison(BaseModel):
+    baseline: str
+    scenarios: List[int]
+    wasted_retries: MetricComparison
+    total_delay_seconds: MetricComparison
+    # Mean delivery success rate; pct_change is in percentage points here.
+    success_rate: MetricComparison
+
+
+class BenchmarkRunResultResponse(BaseModel):
+    """Runs produced by one POST /benchmark/run, plus C-versus-baseline summaries."""
+    runs: List[BenchmarkRunResponse] = Field(default_factory=list)
+    comparison: Dict[str, StrategyComparison] = Field(default_factory=dict)
+
+
+class ContentionEndpointResult(BaseModel):
+    endpoint_id: str
+    total_events: int
+    successful_deliveries: int
+    throughput_events_per_sec: float
+    avg_queue_wait_ms: float
+    p95_queue_wait_ms: float
+    total_retries: int
+
+
+class MultiEndpointStrategyResult(BaseModel):
+    strategy: str
+    quarantine_triggered: bool
+    total_sim_time_sec: float
+    failing: ContentionEndpointResult
+    healthy: ContentionEndpointResult
+
+
+class MultiEndpointResponse(BaseModel):
+    """Noisy-neighbor simulation: one failing and one healthy endpoint sharing a worker pool."""
+    worker_pool_size: int
+    strategies: List[MultiEndpointStrategyResult] = Field(default_factory=list)

@@ -431,3 +431,90 @@ def test_dashboard_ingests_policy_evaluation_into_state_store(client):
     assert len(res_exp.json()["records"]) == 1
     assert res_exp.json()["records"][0]["record_id"] == rec.record_id
 
+
+
+def test_benchmark_run_populates_results_endpoint(client):
+    res = client.post(
+        "/api/chart/benchmark/run", json={"scenario_ids": [10], "seed": 42}
+    )
+
+    assert res.status_code == 200
+    runs = res.json()["runs"]
+    assert {r["strategy"] for r in runs} == {"STRATEGY_A", "STRATEGY_B", "STRATEGY_C"}
+    assert all(r["scenario_id"] == 10 and r["seed"] == 42 for r in runs)
+    assert all(r["total_wasted_retries"] is not None for r in runs)
+
+    stored = client.get("/api/chart/benchmark/results").json()["runs"]
+    assert {r["run_id"] for r in stored} == {r["run_id"] for r in runs}
+
+
+def test_benchmark_run_is_deterministic_and_does_not_duplicate(client):
+    body = {"scenario_ids": [10], "seed": 42}
+    first = client.post("/api/chart/benchmark/run", json=body).json()
+    second = client.post("/api/chart/benchmark/run", json=body).json()
+
+    def metrics(payload):
+        return [
+            (r["strategy"], r["delivery_success_rate"], r["total_wasted_retries"], r["total_delay_seconds"])
+            for r in payload["runs"]
+        ]
+
+    assert metrics(first) == metrics(second)
+    assert first["comparison"] == second["comparison"]
+    assert len(client.get("/api/chart/benchmark/results").json()["runs"]) == 3
+
+
+def test_benchmark_comparison_is_computed_from_the_runs(client):
+    payload = client.post(
+        "/api/chart/benchmark/run", json={"scenario_ids": [4, 10]}
+    ).json()
+    runs = payload["runs"]
+
+    def total(strategy, field):
+        return sum(r[field] for r in runs if r["strategy"] == strategy)
+
+    for key, baseline in (("c_vs_a", "STRATEGY_A"), ("c_vs_b", "STRATEGY_B")):
+        cmp = payload["comparison"][key]
+        assert cmp["baseline"] == baseline
+        assert cmp["scenarios"] == [4, 10]
+        c, b = total("STRATEGY_C", "total_wasted_retries"), total(baseline, "total_wasted_retries")
+        assert cmp["wasted_retries"]["strategy_c"] == c
+        assert cmp["wasted_retries"]["baseline"] == b
+        assert cmp["wasted_retries"]["pct_change"] == pytest.approx((c - b) / b * 100, abs=0.01)
+
+
+def test_benchmark_run_without_strategy_c_has_no_comparison(client):
+    payload = client.post(
+        "/api/chart/benchmark/run",
+        json={"scenario_ids": [10], "strategies": ["STRATEGY_A"]},
+    ).json()
+
+    assert len(payload["runs"]) == 1
+    assert payload["comparison"] == {}
+
+
+def test_benchmark_run_rejects_unknown_inputs(client):
+    res = client.post(
+        "/api/chart/benchmark/run",
+        json={"scenario_ids": [99], "strategies": ["STRATEGY_Z"]},
+    )
+
+    assert res.status_code == 422
+    detail = res.json()["detail"]
+    assert detail["unknown_scenario_ids"] == [99]
+    assert detail["unknown_strategies"] == ["STRATEGY_Z"]
+    assert client.get("/api/chart/benchmark/results").json()["runs"] == []
+
+
+def test_multi_endpoint_comparison_shape(client):
+    res = client.get("/api/chart/benchmark/multi-endpoint")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["worker_pool_size"] > 0
+    by_strategy = {s["strategy"]: s for s in body["strategies"]}
+    assert set(by_strategy) == {"STRATEGY_A", "STRATEGY_B", "STRATEGY_C"}
+    for result in by_strategy.values():
+        assert result["healthy"]["throughput_events_per_sec"] > 0
+        assert result["failing"]["endpoint_id"] != result["healthy"]["endpoint_id"]
+    assert client.get("/api/chart/benchmark/multi-endpoint").json() == body

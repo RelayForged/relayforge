@@ -11,6 +11,7 @@ Also serves as the Tier 3 fallback policy when AEDE is unreachable.
 from datetime import datetime
 from typing import Tuple
 
+from relay.control_plane.aede.integrity import integrity_policy
 from relay.control_plane.explainability.record import (
     ExplainabilityRecord,
     MetricSnapshot,
@@ -22,7 +23,6 @@ from relay.kernel.policies.delivery_policy import (
     BackoffStrategy,
     ConcurrencyPolicy,
     DeliveryPolicy,
-    IntegrityPolicy,
     IsolationAction,
     IsolationPolicy,
     NotificationPolicy,
@@ -38,6 +38,9 @@ class StrategyA(DeliveryStrategy):
     Static baseline strategy (Strategy A).
     Implements fixed exponential backoff with max_parallel=1.
     """
+
+    def __init__(self, hmac_required: bool = False) -> None:
+        self.hmac_required = hmac_required
 
     @property
     def strategy_name(self) -> str:
@@ -74,7 +77,7 @@ class StrategyA(DeliveryStrategy):
                 notify_admin=False,
                 alert_level=AlertLevel.INFO,
             ),
-            integrity_policy=IntegrityPolicy(hmac_required=False),
+            integrity_policy=integrity_policy(self.hmac_required),
         )
 
         record = ExplainabilityRecord(

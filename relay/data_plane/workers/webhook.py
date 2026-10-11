@@ -10,8 +10,6 @@ decides whether signing is required. Strategy A sets hmac_required=False,
 so signing is inert in Week 3-4 and becomes active the moment a policy
 turns it on.
 """
-import hashlib
-import hmac
 import logging
 import os
 import secrets
@@ -21,6 +19,14 @@ from typing import Optional, TYPE_CHECKING
 
 import httpx
 
+from relay.infrastructure.auth.signing import (
+    NONCE_HEADER,
+    SIGNATURE_HEADER,
+    SIGNING_SECRET_ENV,
+    TIMESTAMP_HEADER,
+    compute_relay_signature,
+    signing_secret_from_env,
+)
 from relay.infrastructure.persistence.delivery_attempt_repository import (
     DeliveryAttemptRepository,
 )
@@ -38,7 +44,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_SECONDS = 5.0
-SIGNING_SECRET_ENV = "RELAY_WEBHOOK_SIGNING_SECRET"
 # error_message is persisted and surfaced through the dashboard adapter;
 # transport errors can embed the full target URL and resolved host.
 MAX_ERROR_MESSAGE_CHARS = 500
@@ -220,7 +225,7 @@ class WebhookWorker:
         """
         if policy is None or not policy.integrity_policy.hmac_required:
             return
-        secret = os.environ.get(SIGNING_SECRET_ENV, "")
+        secret = signing_secret_from_env()
         if not secret:
             raise SigningUnavailable(
                 f"policy requires HMAC but {SIGNING_SECRET_ENV} is not set"
@@ -231,12 +236,10 @@ class WebhookWorker:
             if policy.integrity_policy.replay_protection
             else ""
         )
-        signed = b".".join([timestamp.encode("utf-8"), nonce.encode("utf-8"), body])
-        digest = hmac.new(secret.encode("utf-8"), signed, hashlib.sha256).hexdigest()
-        headers["X-Relay-Timestamp"] = timestamp
-        headers["X-Relay-Signature"] = f"sha256={digest}"
+        headers[TIMESTAMP_HEADER] = timestamp
+        headers[SIGNATURE_HEADER] = compute_relay_signature(secret, timestamp, nonce, body)
         if nonce:
-            headers["X-Relay-Nonce"] = nonce
+            headers[NONCE_HEADER] = nonce
 
     async def _post(
         self, target_url: str, body: bytes, headers: dict[str, str]

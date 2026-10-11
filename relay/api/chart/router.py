@@ -2,13 +2,18 @@
 
 Provides read-only endpoints consumed by Person C's React dashboard.
 """
+import asyncio
 from datetime import datetime, timezone
-from typing import Optional
+from functools import lru_cache
+from typing import Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query, status
 
 from relay.api.chart.schemas import (
     BenchmarkResultsResponse,
+    BenchmarkRunRequest,
     BenchmarkRunResponse,
+    BenchmarkRunResultResponse,
+    ContentionEndpointResult,
     DeadLetterItem,
     DeadLetterListResponse,
     EndpointListResponse,
@@ -18,9 +23,15 @@ from relay.api.chart.schemas import (
     ERIHistoryResponse,
     ExplainabilityListResponse,
     ExplainabilityResponse,
+    MetricComparison,
+    MultiEndpointResponse,
+    MultiEndpointStrategyResult,
     PolicyDecisionResponse,
+    StrategyComparison,
 )
-from relay.api.chart.stores import benchmark_store, state_store
+from relay.api.chart.stores import BenchmarkRun, benchmark_store, state_store
+
+BENCHMARK_STRATEGIES = ("STRATEGY_A", "STRATEGY_B", "STRATEGY_C")
 
 router = APIRouter(prefix="/api/chart", tags=["chart-data"])
 
@@ -171,23 +182,209 @@ async def get_explainability_records(
 async def get_benchmark_results() -> BenchmarkResultsResponse:
     """Return collected benchmark results comparing the three strategies."""
     runs = benchmark_store.get_runs()
-    return BenchmarkResultsResponse(
-        runs=[
-            BenchmarkRunResponse(
-                run_id=run.run_id,
-                scenario=run.scenario,
-                strategy=run.strategy,
-                total_events=run.total_events,
-                successful_deliveries=run.successful_deliveries,
-                failed_deliveries=run.failed_deliveries,
-                avg_retry_count=run.avg_retry_count,
-                avg_recovery_time_seconds=run.avg_recovery_time_seconds,
-                started_at=run.started_at,
-                finished_at=run.finished_at,
-            )
-            for run in runs
-        ]
+    return BenchmarkResultsResponse(runs=[_run_response(run) for run in runs])
+
+
+def _run_response(run: BenchmarkRun) -> BenchmarkRunResponse:
+    return BenchmarkRunResponse(
+        run_id=run.run_id,
+        scenario=run.scenario,
+        strategy=run.strategy,
+        total_events=run.total_events,
+        successful_deliveries=run.successful_deliveries,
+        failed_deliveries=run.failed_deliveries,
+        avg_retry_count=run.avg_retry_count,
+        avg_recovery_time_seconds=run.avg_recovery_time_seconds,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+        scenario_id=run.scenario_id,
+        seed=run.seed,
+        delivery_success_rate=run.delivery_success_rate,
+        total_wasted_retries=run.total_wasted_retries,
+        recovery_time_events=run.recovery_time_events,
+        quarantine_count=run.quarantine_count,
+        total_delay_seconds=run.total_delay_seconds,
     )
+
+
+def _execute_benchmark(
+    scenario_ids: List[int], strategies: List[str], seed: int
+) -> List[BenchmarkRun]:
+    # Imported here: the benchmark package is only needed when a run is requested.
+    from benchmark.metrics import summarise
+    from benchmark.runner import BenchmarkRunner, DeliveryStrategyConfig
+    from benchmark.scenarios import get_scenario
+
+    runs: List[BenchmarkRun] = []
+    for scenario_id in scenario_ids:
+        scenario = get_scenario(scenario_id)
+        for strategy in strategies:
+            result = BenchmarkRunner(
+                DeliveryStrategyConfig(strategy=strategy), random_seed=seed
+            ).run(scenario)
+            summary = summarise(result)
+            runs.append(
+                BenchmarkRun(
+                    run_id=summary["run_id"],
+                    scenario=summary["scenario_name"],
+                    strategy=strategy,
+                    total_events=summary["total_events"],
+                    successful_deliveries=summary["successful_deliveries"],
+                    failed_deliveries=summary["failed_deliveries"],
+                    avg_retry_count=summary["avg_retry_count"],
+                    avg_recovery_time_seconds=float(summary["recovery_time_events"]),
+                    started_at=summary["started_at"],
+                    finished_at=summary["finished_at"] or summary["started_at"],
+                    scenario_id=scenario_id,
+                    seed=seed,
+                    delivery_success_rate=summary["delivery_success_rate"],
+                    total_wasted_retries=summary["total_wasted_retries"],
+                    recovery_time_events=summary["recovery_time_events"],
+                    quarantine_count=summary["quarantine_count"],
+                    total_delay_seconds=summary["total_delay_seconds"],
+                )
+            )
+    return runs
+
+
+def _metric(strategy_c: float, baseline: float, *, points: bool = False) -> MetricComparison:
+    if points:
+        change: Optional[float] = round((strategy_c - baseline) * 100.0, 2)
+    elif baseline == 0:
+        change = None
+    else:
+        change = round((strategy_c - baseline) / baseline * 100.0, 2)
+    return MetricComparison(
+        strategy_c=round(strategy_c, 4), baseline=round(baseline, 4), pct_change=change
+    )
+
+
+def _compare(runs: List[BenchmarkRun]) -> Dict[str, StrategyComparison]:
+    """
+    Strategy C against each baseline, over the scenarios where both ran.
+    Every figure is computed from the runs; nothing here is a fixed claim.
+    """
+    by_strategy: Dict[str, Dict[int, BenchmarkRun]] = {}
+    for run in runs:
+        by_strategy.setdefault(run.strategy, {})[run.scenario_id] = run
+
+    comparison: Dict[str, StrategyComparison] = {}
+    c_runs = by_strategy.get("STRATEGY_C", {})
+    for baseline in ("STRATEGY_A", "STRATEGY_B"):
+        base_runs = by_strategy.get(baseline, {})
+        shared = sorted(set(c_runs) & set(base_runs))
+        if not shared:
+            continue
+        c = [c_runs[i] for i in shared]
+        b = [base_runs[i] for i in shared]
+        comparison[f"c_vs_{baseline[-1].lower()}"] = StrategyComparison(
+            baseline=baseline,
+            scenarios=shared,
+            wasted_retries=_metric(
+                sum(r.total_wasted_retries for r in c),
+                sum(r.total_wasted_retries for r in b),
+            ),
+            total_delay_seconds=_metric(
+                sum(r.total_delay_seconds for r in c),
+                sum(r.total_delay_seconds for r in b),
+            ),
+            success_rate=_metric(
+                sum(r.delivery_success_rate for r in c) / len(c),
+                sum(r.delivery_success_rate for r in b) / len(b),
+                points=True,
+            ),
+        )
+    return comparison
+
+
+@router.post(
+    "/benchmark/run",
+    response_model=BenchmarkRunResultResponse,
+    summary="Run the simulated strategy comparison and store the results for charting",
+)
+async def run_benchmark(body: BenchmarkRunRequest) -> BenchmarkRunResultResponse:
+    """
+    Run benchmark scenarios for the requested strategies.
+
+    This is the one non-GET route on the dashboard backend. It is a pure,
+    seeded simulation over synthetic telemetry: it reads and writes no
+    platform data, and its only effect is the in-memory result list that
+    GET /benchmark/results serves. The dashboard remains read-only with
+    respect to events, deliveries, endpoints and policies.
+    """
+    from benchmark.scenarios import ALL_SCENARIOS, EVALUATION_SCENARIO_IDS
+
+    known = {scenario.scenario_id for scenario in ALL_SCENARIOS}
+    scenario_ids = body.scenario_ids or list(EVALUATION_SCENARIO_IDS)
+    strategies = body.strategies or list(BENCHMARK_STRATEGIES)
+
+    unknown_scenarios = sorted(set(scenario_ids) - known)
+    unknown_strategies = sorted(set(strategies) - set(BENCHMARK_STRATEGIES))
+    if unknown_scenarios or unknown_strategies:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "unknown_scenario_ids": unknown_scenarios,
+                "unknown_strategies": unknown_strategies,
+                "known_strategies": list(BENCHMARK_STRATEGIES),
+            },
+        )
+
+    runs = await asyncio.to_thread(
+        _execute_benchmark,
+        list(dict.fromkeys(scenario_ids)),
+        list(dict.fromkeys(strategies)),
+        body.seed,
+    )
+    for run in runs:
+        benchmark_store.replace_run(run)
+
+    return BenchmarkRunResultResponse(
+        runs=[_run_response(run) for run in runs],
+        comparison=_compare(runs),
+    )
+
+
+@lru_cache(maxsize=1)
+def _multi_endpoint_results() -> MultiEndpointResponse:
+    # Deterministic (fixed seed), so one computation serves every request.
+    from benchmark.multi_endpoint import run_full_multi_endpoint_comparison
+
+    def endpoint(result) -> ContentionEndpointResult:
+        return ContentionEndpointResult(
+            endpoint_id=result.endpoint_id,
+            total_events=result.total_events,
+            successful_deliveries=result.successful_deliveries,
+            throughput_events_per_sec=result.throughput_events_per_sec,
+            avg_queue_wait_ms=result.avg_queue_wait_ms,
+            p95_queue_wait_ms=result.p95_queue_wait_ms,
+            total_retries=result.total_retries,
+        )
+
+    results = run_full_multi_endpoint_comparison()
+    return MultiEndpointResponse(
+        worker_pool_size=next(iter(results.values())).worker_pool_size,
+        strategies=[
+            MultiEndpointStrategyResult(
+                strategy=strategy,
+                quarantine_triggered=result.quarantine_triggered,
+                total_sim_time_sec=result.total_sim_time_sec,
+                failing=endpoint(result.failing_result),
+                healthy=endpoint(result.healthy_result),
+            )
+            for strategy, result in results.items()
+        ],
+    )
+
+
+@router.get(
+    "/benchmark/multi-endpoint",
+    response_model=MultiEndpointResponse,
+    summary="Noisy-neighbor comparison: a failing and a healthy endpoint on one worker pool",
+)
+async def get_multi_endpoint_comparison() -> MultiEndpointResponse:
+    """Simulated contention results per strategy, for the Multi-Endpoint tab."""
+    return await asyncio.to_thread(_multi_endpoint_results)
 
 
 @router.get(

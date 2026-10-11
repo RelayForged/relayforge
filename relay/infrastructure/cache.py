@@ -105,9 +105,9 @@ class PolicyFallbackManager:
     Ensures workers always get a valid policy even during AEDE outages.
     """
 
-    def __init__(self, cache: PolicyCache):
+    def __init__(self, cache: PolicyCache, hmac_required: bool = False):
         self.cache = cache
-        self.static_strategy = StrategyA()
+        self.static_strategy = StrategyA(hmac_required=hmac_required)
 
     def get_tier_2_cached_policy(
         self, endpoint_id: str, current_time: Optional[datetime] = None

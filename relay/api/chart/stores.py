@@ -36,6 +36,14 @@ class BenchmarkRun:
     avg_recovery_time_seconds: float
     started_at: str
     finished_at: str
+    # Set for runs produced by POST /benchmark/run; absent on older records.
+    scenario_id: Optional[int] = None
+    seed: Optional[int] = None
+    delivery_success_rate: Optional[float] = None
+    total_wasted_retries: Optional[int] = None
+    recovery_time_events: Optional[int] = None
+    quarantine_count: Optional[int] = None
+    total_delay_seconds: Optional[float] = None
 
 
 class EndpointStateStore:
@@ -155,6 +163,20 @@ class BenchmarkResultStore:
         self._runs: List[BenchmarkRun] = []
 
     def add_run(self, run: BenchmarkRun) -> None:
+        self._runs.append(run)
+
+    def replace_run(self, run: BenchmarkRun) -> None:
+        """
+        Store a run, dropping any earlier run of the same scenario,
+        strategy and seed. The benchmark is deterministic, so a repeat is
+        the same result and must not show up as a second bar.
+        """
+        self._runs = [
+            existing
+            for existing in self._runs
+            if (existing.scenario_id, existing.strategy, existing.seed)
+            != (run.scenario_id, run.strategy, run.seed)
+        ]
         self._runs.append(run)
 
     def get_runs(self) -> List[BenchmarkRun]:

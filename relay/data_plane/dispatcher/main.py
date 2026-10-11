@@ -29,6 +29,7 @@ from relay.control_plane.aede.strategies import StrategyA, StrategyB, StrategyC
 from relay.data_plane.replay.manager import ReplayWork
 from relay.data_plane.retry_manager.manager import RetryManager, RetryWork
 from relay.data_plane.workers.webhook import WebhookWorker
+from relay.infrastructure.auth.signing import hmac_required_from_env
 from relay.infrastructure.messaging.producer import warmup as warmup_producer
 from relay.infrastructure.cache import (
     InMemoryPolicyCache,
@@ -122,7 +123,12 @@ class Dispatcher:
 
         self._flags = feature_flags or FeatureFlags.from_env()
         self._cache = cache or InMemoryPolicyCache()
-        self._fallback_manager = fallback_manager or PolicyFallbackManager(cache=self._cache)
+        # Handed to whichever strategy produces the policy; the Dispatcher
+        # itself never decides whether a request is signed.
+        hmac_required = hmac_required_from_env()
+        self._fallback_manager = fallback_manager or PolicyFallbackManager(
+            cache=self._cache, hmac_required=hmac_required
+        )
         self._aede_service = aede_service
 
         self._worker = worker or WebhookWorker(
@@ -144,11 +150,11 @@ class Dispatcher:
         self._endpoint_slots: dict[str, asyncio.Semaphore] = {}
 
         if self._flags.active_strategy_name == "STRATEGY_A":
-            self._strategy = StrategyA()
+            self._strategy = StrategyA(hmac_required=hmac_required)
         elif self._flags.active_strategy_name == "STRATEGY_B":
-            self._strategy = StrategyB()
+            self._strategy = StrategyB(hmac_required=hmac_required)
         else:
-            self._strategy = StrategyC()
+            self._strategy = StrategyC(hmac_required=hmac_required)
 
         logger.info(
             "Dispatcher initialized with strategy=%s (AEDE=%s, ERI=%s, StateMachine=%s)",
