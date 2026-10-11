@@ -12,6 +12,7 @@ versus simple adaptive backoff.
 from datetime import datetime
 from typing import Tuple
 
+from relay.control_plane.aede.integrity import integrity_policy
 from relay.control_plane.explainability.record import (
     ExplainabilityRecord,
     MetricSnapshot,
@@ -23,7 +24,6 @@ from relay.kernel.policies.delivery_policy import (
     BackoffStrategy,
     ConcurrencyPolicy,
     DeliveryPolicy,
-    IntegrityPolicy,
     IsolationAction,
     IsolationPolicy,
     NotificationPolicy,
@@ -39,6 +39,9 @@ class StrategyB(DeliveryStrategy):
     Adaptive baseline strategy (Strategy B).
     Scales retry interval based on success_rate_score without state machine.
     """
+
+    def __init__(self, hmac_required: bool = False) -> None:
+        self.hmac_required = hmac_required
 
     @property
     def strategy_name(self) -> str:
@@ -93,7 +96,7 @@ class StrategyB(DeliveryStrategy):
                 notify_admin=eri.success_rate_score < 0.3,
                 alert_level=AlertLevel.WARNING if eri.success_rate_score < 0.3 else AlertLevel.INFO,
             ),
-            integrity_policy=IntegrityPolicy(hmac_required=False),
+            integrity_policy=integrity_policy(self.hmac_required),
         )
 
         record = ExplainabilityRecord(

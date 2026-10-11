@@ -23,6 +23,7 @@ from relay.control_plane.aede.synthesizer import synthesize_policy
 from relay.control_plane.eri.calculator import compute_eri
 from relay.control_plane.explainability.record import ExplainabilityRecord
 from relay.control_plane.state_machine.transitions import next_state
+from relay.infrastructure.auth.signing import hmac_required_from_env
 from relay.infrastructure.cache import InMemoryPolicyCache, PolicyCache
 from relay.infrastructure.messaging.admin import EVENTS_INTERNAL_POLICY_TOPIC
 from relay.infrastructure.messaging.producer import publish
@@ -64,6 +65,7 @@ class AEDEService:
         window_size: int = 100,
         publish_events: bool = True,
         publisher: Optional[Callable[[str, str, bytes], Any]] = None,
+        hmac_required: Optional[bool] = None,
     ) -> None:
         self._cache = cache or InMemoryPolicyCache()
         self._explainability_repo = (
@@ -88,6 +90,11 @@ class AEDEService:
             recovery_threshold=80.0,
         )
         self._window_size = window_size
+        # Fixed for the life of the service and passed to every synthesis
+        # as an explicit argument (the synthesizer never reads the env).
+        self._hmac_required = (
+            hmac_required if hmac_required is not None else hmac_required_from_env()
+        )
         self._publish_events = publish_events
         self._publisher = publisher
 
@@ -174,6 +181,7 @@ class AEDEService:
             state_after=EndpointState.RECOVERING,
             eri=eri,
             thresholds=self._thresholds,
+            hmac_required=self._hmac_required,
             computed_at=restored_at,
         )
         record = record.model_copy(
@@ -232,6 +240,7 @@ class AEDEService:
             state_after=current_state,
             eri=eri,
             thresholds=self._thresholds,
+            hmac_required=self._hmac_required,
             computed_at=computed_at or datetime.now(timezone.utc),
         )
         return policy
@@ -271,6 +280,7 @@ class AEDEService:
                 state_after=current_state,
                 eri=eri,
                 thresholds=self._thresholds,
+            hmac_required=self._hmac_required,
                 computed_at=computed_at,
             )
             return eri, current_state, policy, explainability_record
@@ -310,6 +320,7 @@ class AEDEService:
             state_after=new_state,
             eri=eri,
             thresholds=self._thresholds,
+            hmac_required=self._hmac_required,
             computed_at=computed_at,
         )
 

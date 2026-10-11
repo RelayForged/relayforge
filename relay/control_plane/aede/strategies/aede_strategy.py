@@ -26,7 +26,12 @@ class StrategyC(DeliveryStrategy):
     Runs state machine transition logic and synthesizes policy accordingly.
     """
 
-    def __init__(self, thresholds: StateMachineThresholds | None = None):
+    def __init__(
+        self,
+        thresholds: StateMachineThresholds | None = None,
+        hmac_required: bool = False,
+    ):
+        self.hmac_required = hmac_required
         # Matches the production default in relay/control_plane/aede/service.py.
         self.thresholds = thresholds or StateMachineThresholds(
             degradation_threshold=75.0,
@@ -56,5 +61,6 @@ class StrategyC(DeliveryStrategy):
             eri=eri,
             thresholds=self.thresholds,
             computed_at=computed_at,
+            hmac_required=self.hmac_required,
         )
         return policy, record

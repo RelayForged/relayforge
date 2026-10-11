@@ -13,6 +13,7 @@ Time boundaries are passed as explicit parameters (computed_at); datetime.now() 
 from datetime import datetime
 from typing import Tuple
 
+from relay.control_plane.aede.integrity import integrity_policy
 from relay.control_plane.explainability.record import (
     ExplainabilityRecord,
     MetricSnapshot,
@@ -23,7 +24,6 @@ from relay.kernel.policies.delivery_policy import (
     BackoffStrategy,
     ConcurrencyPolicy,
     DeliveryPolicy,
-    IntegrityPolicy,
     IsolationAction,
     IsolationPolicy,
     NotificationPolicy,
@@ -44,6 +44,7 @@ def synthesize_policy(
     eri: ERIScore,
     thresholds: StateMachineThresholds,
     computed_at: datetime,
+    hmac_required: bool = False,
 ) -> Tuple[DeliveryPolicy, ExplainabilityRecord]:
     """
     Synthesizes an immutable DeliveryPolicy and matching ExplainabilityRecord.
@@ -55,6 +56,9 @@ def synthesize_policy(
         eri: Computed ERIScore object.
         thresholds: Current StateMachineThresholds configuration.
         computed_at: Explicit timestamp for determinism.
+        hmac_required: Whether deliveries must be signed. An explicit input,
+            never read from the environment here, so identical inputs still
+            produce identical policies.
 
     Returns:
         tuple of (DeliveryPolicy, ExplainabilityRecord).
@@ -142,7 +146,7 @@ def synthesize_policy(
     else:
         raise ValueError(f"Unknown EndpointState: {state_after}")
 
-    integrity_pol = IntegrityPolicy(hmac_required=False)
+    integrity_pol = integrity_policy(hmac_required)
 
     # 2. Construct immutable DeliveryPolicy
     policy = DeliveryPolicy(
