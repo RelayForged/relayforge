@@ -78,7 +78,7 @@ C builds against these. Ports: API 8000, dashboard 8090, simulator 8088 on the h
 ```
 
 - `policy_decision` and `policy_explanation` keep their current shape (`relay/dashboard/models.py`). `policy_explanation` already carries `state_before`, `state_after`, `state_changed`, `reason` and `triggered_thresholds`, which is all T6 and T11 need.
-- Sub-score keys are the ones `state_store` already uses (`relay/api/chart/stores.py:72-80`). Values are on the scale of the `ERIScore` sub-score fields.
+- Sub-score keys are the ones `state_store` already uses (`relay/api/chart/stores.py:72-80`). Values are 0.0–1.0 (1.0 = healthy), as on `ERIScore`; `eri_weights` uses the same keys.
 - `eri` becomes a float. It is an int today.
 - `source` is `"live"` or `"synthetic"`. C shows a visible marker when it is synthetic.
 
@@ -129,7 +129,7 @@ Files: `simulator/config.py`, `simulator/service.py`, `simulator/main.py`, new `
    - The publisher goes through the same persist-then-publish path as `POST /events`. Extract that from `ingest_event` into a helper both callers use. No event is published from memory alone.
    - The publisher task is held in process memory. Expose it through `GET /demo/status` and cancel it in the app lifespan so it is visible state, not hidden state.
    - Mount the router only when `RELAY_DEMO_ENABLED=true`, and keep `require_owner` on it. It is a control surface.
-5. Timeout preset: `latency_ms` must exceed the worker timeout. Ask A to set `RELAY_WEBHOOK_TIMEOUT_SECONDS=2` on the dispatcher and use `latency_ms=3000`, so an outage collapses in seconds rather than tens of seconds.
+5. Timeout preset: `latency_ms` must exceed the worker timeout. The preset uses `latency_ms=6000`, which is above the 5 s default, so it is a real timeout whatever the dispatcher is set to. Ask A to set `RELAY_WEBHOOK_TIMEOUT_SECONDS=2` on the dispatcher so an outage collapses in seconds rather than tens of seconds.
 6. Add CORS to the API and simulator apps.
 7. Tests: one per simulator mode; demo router with a mocked simulator and publisher (preset validation, idempotent bootstrap, single publisher task, stop).
 

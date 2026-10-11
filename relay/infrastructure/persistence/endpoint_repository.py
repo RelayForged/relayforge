@@ -67,3 +67,37 @@ class EndpointRepository:
             created_at=row.created_at,
             is_active=row.is_active,
         )
+
+    async def get_by_owner_and_target(
+        self, owner_id: str, target_url: str
+    ) -> Optional[Endpoint]:
+        """
+        The oldest Endpoint an owner registered for a target URL, if any.
+
+        Lets a caller that provisions its own endpoint (the demo scenario
+        engine) find it again after a restart instead of registering a
+        duplicate, which would fan every event out twice.
+        """
+        stmt = (
+            select(endpoints_table)
+            .where(
+                endpoints_table.c.owner_id == owner_id,
+                endpoints_table.c.target_url == target_url,
+            )
+            .order_by(endpoints_table.c.created_at)
+            .limit(1)
+        )
+        async with self._engine.connect() as conn:
+            result = await conn.execute(stmt)
+            row = result.fetchone()
+
+        if row is None:
+            return None
+
+        return Endpoint(
+            endpoint_id=row.endpoint_id,
+            target_url=row.target_url,
+            owner_id=row.owner_id,
+            created_at=row.created_at,
+            is_active=row.is_active,
+        )

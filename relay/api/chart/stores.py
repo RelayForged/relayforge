@@ -132,6 +132,12 @@ class EndpointStateStore:
     def list_endpoints(self) -> List[str]:
         return list(self._states.keys())
 
+    def get_latest_endpoint_id(self) -> Optional[str]:
+        """The endpoint with the most recent evaluation, or None if nothing has been evaluated."""
+        if not self._last_evaluated:
+            return None
+        return max(self._last_evaluated, key=self._last_evaluated.__getitem__)
+
     def clear(self) -> None:
         """Clear all stored state (useful for tests)."""
         self._states.clear()

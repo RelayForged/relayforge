@@ -4,9 +4,11 @@ import asyncio
 from contextlib import asynccontextmanager, suppress
 import json
 import logging
-from typing import AsyncIterator
+import os
+from typing import AsyncIterator, Optional
 
 from fastapi import FastAPI, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
 
 from relay.api.chart import chart_router
 from relay.api.chart.stores import state_store
@@ -81,11 +83,27 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         await task
 
 
+def _cors_origins() -> list[str]:
+    """Browser origins allowed to read the Chart Data API (the Vite dev server by default)."""
+    raw = os.environ.get(
+        "RELAY_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+    )
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
 app = FastAPI(title="RelayForge Dashboard", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins(),
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
 app.include_router(chart_router)
 
 
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket) -> None:
+async def websocket_endpoint(
+    websocket: WebSocket, endpoint_id: Optional[str] = None
+) -> None:
     await websocket.accept()
-    await send_state_update(websocket)
+    await send_state_update(websocket, endpoint_id)

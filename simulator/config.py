@@ -4,10 +4,14 @@ from pydantic import BaseModel, Field
 
 
 class FailureMode(str, Enum):
+    SUCCESS = "success"
     HTTP_ERROR = "http_error"
     TIMEOUT = "timeout"
     SLOW = "slow"
     RATE_LIMIT = "rate_limit"
+    MIXED = "mixed"
+    AUTH_FAILURE = "auth_failure"
+    CONNECTION_RESET = "connection_reset"
 
 
 class SimulatorConfig(BaseModel):

@@ -3,7 +3,10 @@ from typing import NotRequired, TypedDict
 
 class ERIPoint(TypedDict):
     timestamp: str
-    value: int
+    value: float
+
+    state: NotRequired[str]
+    sub_scores: NotRequired[dict[str, float]]
 
 
 class DeliveryEvent(TypedDict):
@@ -68,8 +71,16 @@ class PolicyExplanation(TypedDict):
 class StateUpdate(TypedDict):
     type: str
     state: str
-    eri: int
+    eri: float
     eri_history: list[ERIPoint]
     delivery_events: list[DeliveryEvent]
     policy_decision: PolicyDecision
     policy_explanation: PolicyExplanation
+
+    # "live" when built from the Control Plane's evaluations, "synthetic"
+    # when built from DashboardDemoSource. The frontend must show which.
+    source: NotRequired[str]
+    endpoint_id: NotRequired[str | None]
+    eri_sub_scores: NotRequired[dict[str, float]]
+    eri_weights: NotRequired[dict[str, float]]
+    thresholds: NotRequired[dict[str, float]]

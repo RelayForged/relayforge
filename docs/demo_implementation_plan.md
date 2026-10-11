@@ -227,7 +227,7 @@ A prominent **"Demo Scenarios" control panel** with large labeled buttons. Each 
 | ▶ Normal | `{mode:"success", rate:0}` | ERI=100, AVAILABLE |
 | ⚠ Early Degradation | `{mode:"mixed", rate:0.4, latency_ms:300}` | ERI→72, OBSERVED_DEGRADATION |
 | 🔴 Instability | `{mode:"http_error", rate:0.75}` | ERI→42, UNSTABLE, backoff visible |
-| 💀 Full Outage | `{mode:"timeout", rate:1.0, latency_ms:3000}` | ERI collapses, QUARANTINED, HTTP halts |
+| 💀 Full Outage | `{mode:"timeout", rate:1.0, latency_ms:6000}` | ERI collapses, QUARANTINED, HTTP halts |
 | 🔄 Recovery | `{mode:"success", rate:0}` + admin restore | RECOVERING probe, ERI climbs above the recovery threshold |
 | ⚡ Rate Limiting | `{mode:"rate_limit", rate:0.8}` | 429s → success_rate radar spike |
 | 🔑 Auth Failure | `{mode:"auth_failure", rate:1.0}` | HTTP 401, different ERI sub-metric pattern |
@@ -235,7 +235,7 @@ A prominent **"Demo Scenarios" control panel** with large labeled buttons. Each 
 
 **[Audit] corrections**
 - Presets are defined on the server; the frontend sends only a scenario id (`normal`, `early_degradation`, `instability`, `full_outage`, `recovery`, `rate_limiting`, `auth_failure`, `network_partition`).
-- `timeout` mode only sleeps `latency_ms` and then returns 200, so the preset needs `latency_ms` above the worker timeout. Set `RELAY_WEBHOOK_TIMEOUT_SECONDS=2` on the dispatcher.
+- `timeout` mode only sleeps `latency_ms` and then returns 200, so the preset needs `latency_ms` above the worker timeout (5 s by default; the preset uses 6000). Set `RELAY_WEBHOOK_TIMEOUT_SECONDS=2` on the dispatcher so the outage collapses quickly.
 - The API reaches the simulator over HTTP (`SIMULATOR_URL`). The demo endpoint and subscription must be created idempotently, or every restart doubles deliveries.
 - Auto-published events go through the same persist-then-publish path as `POST /events`.
 - The demo router is mounted only when `RELAY_DEMO_ENABLED=true`.
