@@ -26,6 +26,7 @@ from pydantic import ValidationError
 
 from relay.control_plane.aede.service import AEDEService
 from relay.control_plane.aede.strategies import StrategyA, StrategyB, StrategyC
+from relay.data_plane.replay.manager import ReplayWork
 from relay.data_plane.retry_manager.manager import RetryManager, RetryWork
 from relay.data_plane.workers.webhook import WebhookWorker
 from relay.infrastructure.messaging.producer import warmup as warmup_producer
@@ -35,7 +36,10 @@ from relay.infrastructure.cache import (
     PolicyFallbackManager,
 )
 from relay.infrastructure.feature_flags import FeatureFlags
-from relay.infrastructure.messaging.admin import EVENTS_INTERNAL_ENDPOINT_TOPIC
+from relay.infrastructure.messaging.admin import (
+    EVENTS_INTERNAL_ENDPOINT_TOPIC,
+    EVENTS_INTERNAL_REPLAY_TOPIC,
+)
 from relay.infrastructure.messaging.consumer import (
     EVENTS_BUSINESS_TOPIC,
     EVENTS_INTERNAL_DELIVERY_TOPIC,
@@ -102,6 +106,7 @@ class Dispatcher:
                 EVENTS_BUSINESS_TOPIC,
                 EVENTS_INTERNAL_DELIVERY_TOPIC,
                 EVENTS_INTERNAL_ENDPOINT_TOPIC,
+                EVENTS_INTERNAL_REPLAY_TOPIC,
             ),
             group_id=DISPATCHER_GROUP_ID,
         )
@@ -170,6 +175,9 @@ class Dispatcher:
         if message.topic == EVENTS_INTERNAL_DELIVERY_TOPIC:
             await self._accept_retry(message)
             return
+        if message.topic == EVENTS_INTERNAL_REPLAY_TOPIC:
+            await self._accept_replay(message)
+            return
         await self._message_slots.acquire()
         task = asyncio.create_task(self._run_message(message))
         self._messages.add(task)
@@ -195,6 +203,74 @@ class Dispatcher:
         finally:
             await self._consumer.commit(message)
 
+
+    async def _accept_replay(self, message: KafkaMessage) -> None:
+        try:
+            work = ReplayWork.model_validate_json(message.value)
+        except ValidationError:
+            logger.warning(
+                "Skipping invalid replay payload partition=%s offset=%s",
+                message.partition,
+                message.offset,
+            )
+            await self._consumer.commit(message)
+            return
+
+        await self._message_slots.acquire()
+        task = asyncio.create_task(self._run_replay(work, message))
+        self._messages.add(task)
+        task.add_done_callback(self._messages.discard)
+
+    async def _run_replay(self, work: ReplayWork, message: KafkaMessage) -> None:
+        """
+        Dispatch a replayed Event to its one subscription (ADR 0021).
+
+        Goes through _dispatch_one like any first delivery, so the policy
+        comes from the Control Plane and a paused or quarantined endpoint
+        is not contacted: the Delivery is parked again instead. Committed
+        only after the work is durable, so a crash redelivers the replay.
+        """
+        try:
+            subscription = await self._subscriptions.get_by_id(work.subscription_id)
+            endpoint = (
+                await self._endpoints.get_by_id(subscription.endpoint_id)
+                if subscription is not None
+                else None
+            )
+            if subscription is None or endpoint is None or not endpoint.is_active:
+                # Nothing a retry of this message could fix.
+                logger.warning(
+                    "Dropping replay replay_id=%s source_delivery_id=%s: "
+                    "subscription or active endpoint no longer exists",
+                    work.replay_id,
+                    work.source_delivery_id,
+                )
+            else:
+                await self._dispatch_one(
+                    work.event, subscription, endpoint, datetime.now(timezone.utc)
+                )
+                logger.info(
+                    "replay dispatched replay_id=%s source_delivery_id=%s "
+                    "endpoint_id=%s event_id=%s",
+                    work.replay_id,
+                    work.source_delivery_id,
+                    endpoint.endpoint_id,
+                    work.event.event_id,
+                )
+        except Exception:
+            # Not committed: the replay is redelivered, as for a business event.
+            logger.exception(
+                "Replay failed replay_id=%s source_delivery_id=%s partition=%s offset=%s",
+                work.replay_id,
+                work.source_delivery_id,
+                message.partition,
+                message.offset,
+            )
+            return
+        else:
+            await self._consumer.commit(message)
+        finally:
+            self._message_slots.release()
 
     async def _run_message(self, message: KafkaMessage) -> None:
         try:

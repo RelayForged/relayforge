@@ -229,3 +229,42 @@ def test_custom_base_url():
     assert len(requested_urls) == 1
     assert requested_urls[0] == "http://custom-api.internal:8080/v1/events"
     client.close()
+
+
+def test_replay_dead_letters_posts_filters_and_parses_result():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            202,
+            json={
+                "replay_id": "replay-1",
+                "requested": 3,
+                "skipped": [{"delivery_id": "d-2", "why": "already replayed"}],
+            },
+        )
+
+    client = RelayClient(transport=httpx.MockTransport(handler))
+    result = client.replay_dead_letters(endpoint_id="ep-1", delivery_ids=["d-1", "d-2"], limit=5)
+
+    assert seen == {
+        "path": "/replay",
+        "body": {"limit": 5, "endpoint_id": "ep-1", "delivery_ids": ["d-1", "d-2"]},
+    }
+    assert result.replay_id == "replay-1"
+    assert result.requested == 3
+    assert result.skipped == [{"delivery_id": "d-2", "why": "already replayed"}]
+
+
+def test_replay_dead_letters_omits_unset_filters():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(202, json={"replay_id": "r", "requested": 0, "skipped": []})
+
+    RelayClient(transport=httpx.MockTransport(handler)).replay_dead_letters()
+
+    assert seen["body"] == {"limit": 50}

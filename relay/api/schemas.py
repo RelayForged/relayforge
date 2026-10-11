@@ -90,3 +90,25 @@ class RestoreEndpointResponse(BaseModel):
     endpoint_id: str
     target_state: str
 
+
+
+class ReplayRequest(BaseModel):
+    """
+    Which dead letters to replay. With neither field set, the oldest
+    `limit` dead letters across the caller's reach are replayed.
+    """
+
+    endpoint_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    delivery_ids: Optional[List[str]] = Field(default=None, max_length=500)
+    limit: int = Field(default=50, ge=1, le=500)
+
+
+class SkippedReplayResponse(BaseModel):
+    delivery_id: str
+    why: str
+
+
+class ReplayResponse(BaseModel):
+    replay_id: str
+    requested: int
+    skipped: List[SkippedReplayResponse] = Field(default_factory=list)

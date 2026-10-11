@@ -2,12 +2,15 @@
 
 Provides read-only endpoints consumed by Person C's React dashboard.
 """
+from datetime import datetime, timezone
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, status
 
 from relay.api.chart.schemas import (
     BenchmarkResultsResponse,
     BenchmarkRunResponse,
+    DeadLetterItem,
+    DeadLetterListResponse,
     EndpointListResponse,
     EndpointStateResponse,
     EndpointSummary,
@@ -183,5 +186,40 @@ async def get_benchmark_results() -> BenchmarkResultsResponse:
                 finished_at=run.finished_at,
             )
             for run in runs
+        ]
+    )
+
+
+@router.get(
+    "/dlq",
+    response_model=DeadLetterListResponse,
+    summary="List deliveries that need an operator (failed, dead-lettered, or parked)",
+)
+async def list_dead_letters(
+    endpoint_id: Optional[str] = Query(default=None, description="Limit to one endpoint"),
+    limit: int = Query(default=50, ge=1, le=500, description="Max items to return"),
+) -> DeadLetterListResponse:
+    """Read-only view of the dead-letter set. Replay is requested through the API, not here."""
+    # Imported here so the chart router still loads where no database is configured.
+    from relay.infrastructure.persistence.delivery_repository import DeliveryRepository
+
+    dead_letters = await DeliveryRepository().get_dead_letters(
+        now=datetime.now(timezone.utc),
+        endpoint_id=endpoint_id,
+        limit=limit,
+    )
+    return DeadLetterListResponse(
+        items=[
+            DeadLetterItem(
+                delivery_id=item.delivery.delivery_id,
+                event_id=item.delivery.event_id,
+                event_type=item.event_type,
+                endpoint_id=item.delivery.endpoint_id,
+                reason=item.reason,
+                attempt_count=item.attempt_count,
+                last_error=item.last_error,
+                failed_at=item.failed_at.isoformat(),
+            )
+            for item in dead_letters
         ]
     )

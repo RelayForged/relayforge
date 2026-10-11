@@ -73,3 +73,80 @@ def test_endpoint_lifecycle_and_restore(client):
 def test_restore_nonexistent_endpoint(client):
     res = client.post("/endpoints/nonexistent-id/restore")
     assert res.status_code == 404
+
+
+class FakeReplayManager:
+    def __init__(self) -> None:
+        self.calls = []
+
+    async def replay_dead_letters(self, *, now, endpoint_id=None, delivery_ids=None, limit=50):
+        from relay.data_plane.replay.manager import ReplayResult, SkippedReplay
+
+        self.calls.append(
+            {"endpoint_id": endpoint_id, "delivery_ids": delivery_ids, "limit": limit}
+        )
+        return ReplayResult(
+            replay_id="replay-1",
+            requested=2,
+            skipped=[SkippedReplay(delivery_id="d-9", why="already replayed")],
+        )
+
+
+@pytest.fixture
+def replay_client(client):
+    manager = FakeReplayManager()
+    app.dependency_overrides[deps.get_replay_manager] = lambda: manager
+    client.replays = manager
+    return client
+
+
+def test_replay_requests_dead_letters_for_an_endpoint(replay_client):
+    endpoint_id = replay_client.post(
+        "/endpoints", json={"target_url": "https://example.com/webhook"}
+    ).json()["endpoint_id"]
+
+    res = replay_client.post(
+        "/replay", json={"endpoint_id": endpoint_id, "delivery_ids": ["d-1", "d-9"], "limit": 10}
+    )
+
+    assert res.status_code == 202
+    assert res.json() == {
+        "replay_id": "replay-1",
+        "requested": 2,
+        "skipped": [{"delivery_id": "d-9", "why": "already replayed"}],
+    }
+    assert replay_client.replays.calls == [
+        {"endpoint_id": endpoint_id, "delivery_ids": ["d-1", "d-9"], "limit": 10}
+    ]
+
+
+def test_replay_unknown_endpoint_is_404_and_requests_nothing(replay_client):
+    res = replay_client.post("/replay", json={"endpoint_id": "missing"})
+
+    assert res.status_code == 404
+    assert replay_client.replays.calls == []
+
+
+def test_replay_rejects_another_owners_endpoint(replay_client, monkeypatch):
+    from relay.api import security
+
+    endpoint_id = replay_client.post(
+        "/endpoints", json={"target_url": "https://example.com/webhook", "owner_id": "team-a"}
+    ).json()["endpoint_id"]
+
+    monkeypatch.setenv("RELAY_API_KEYS", "team-b:secret-b")
+    security._configured_keys.cache_clear()
+    try:
+        res = replay_client.post(
+            "/replay", json={"endpoint_id": endpoint_id}, headers={"X-API-Key": "secret-b"}
+        )
+        no_endpoint = replay_client.post(
+            "/replay", json={}, headers={"X-API-Key": "secret-b"}
+        )
+    finally:
+        monkeypatch.delenv("RELAY_API_KEYS")
+        security._configured_keys.cache_clear()
+
+    assert res.status_code == 403
+    assert no_endpoint.status_code == 400
+    assert replay_client.replays.calls == []

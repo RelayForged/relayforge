@@ -96,3 +96,20 @@ class EndpointSummary(BaseModel):
 class EndpointListResponse(BaseModel):
     """List of registered endpoints and their live statuses."""
     endpoints: List[EndpointSummary] = Field(default_factory=list)
+
+
+class DeadLetterItem(BaseModel):
+    """A delivery that will not complete on its own."""
+    delivery_id: str
+    event_id: str
+    event_type: str
+    endpoint_id: str
+    reason: str  # FAILED, DEAD_LETTER, or PARKED
+    attempt_count: int
+    last_error: Optional[str] = None
+    failed_at: str
+
+
+class DeadLetterListResponse(BaseModel):
+    """Dead letters for the DLQ panel, oldest first."""
+    items: List[DeadLetterItem] = Field(default_factory=list)
