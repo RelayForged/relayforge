@@ -182,7 +182,9 @@ class Dispatcher:
             action = data.get("action")
             endpoint_id = data.get("endpoint_id")
             if action == "restore" and endpoint_id and self._aede_service is not None:
-                self._aede_service.restore_endpoint(endpoint_id)
+                await self._aede_service.restore_and_publish(
+                    endpoint_id, restored_at=datetime.now(timezone.utc)
+                )
                 logger.info("Dispatcher applied manual restore for endpoint=%s", endpoint_id)
         except Exception:
             logger.exception(

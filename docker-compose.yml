@@ -129,6 +129,9 @@ services:
       ERI_ENABLED: "true"
       STATE_MACHINE_ENABLED: "true"
       AEDE_QUARANTINE_THRESHOLD: "45.0"
+      # Demo scenario engine (relay/api/demo.py). Off unless enabled here.
+      RELAY_DEMO_ENABLED: "true"
+      SIMULATOR_URL: http://simulator:8080
     depends_on:
       postgres:
         condition: service_healthy
@@ -160,6 +163,8 @@ services:
       ERI_ENABLED: "true"
       STATE_MACHINE_ENABLED: "true"
       AEDE_QUARANTINE_THRESHOLD: "45.0"
+      # Short enough that a simulated outage collapses ERI within seconds.
+      RELAY_WEBHOOK_TIMEOUT_SECONDS: "2"
     depends_on:
       postgres:
         condition: service_healthy

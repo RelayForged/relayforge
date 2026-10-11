@@ -48,7 +48,7 @@ class DummyRepo:
 
 @pytest.mark.asyncio
 async def test_dispatcher_accept_endpoint_restore():
-    aede = AEDEService()
+    aede = AEDEService(publish_events=False)
     endpoint_id = "ep-test-123"
     # Put endpoint in QUARANTINED state
     aede.set_endpoint_state(endpoint_id, EndpointState.QUARANTINED)

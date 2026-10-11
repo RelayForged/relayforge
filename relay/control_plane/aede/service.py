@@ -13,7 +13,7 @@ AEDEService executes the Control Plane feedback loop:
 """
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 import os
@@ -94,6 +94,8 @@ class AEDEService:
         # In-memory operational state tracking
         self._endpoint_states: Dict[str, EndpointState] = {}
         self._telemetry_windows: Dict[str, List[Telemetry]] = {}
+        # When each endpoint was last restored by an operator (ADR 0020).
+        self._restored_at: Dict[str, datetime] = {}
 
     def get_endpoint_state(self, endpoint_id: str) -> EndpointState:
         """Return the current EndpointState for the given endpoint (defaults to AVAILABLE)."""
@@ -104,13 +106,104 @@ class AEDEService:
         self._endpoint_states[endpoint_id] = state
 
     def restore_endpoint(self, endpoint_id: str) -> EndpointState:
-        """Simulate manual admin restoration from QUARANTINED to RECOVERING."""
+        """
+        State-only restoration from QUARANTINED to RECOVERING.
+
+        This is the transition the benchmark runner models (it flips the
+        state and keeps the sliding window), and
+        benchmark/validate_against_real_aede.py checks parity against it,
+        so it is deliberately left unchanged. The live operator path is
+        restore_and_publish(); see ADR 0020 for how the two differ.
+        """
         current = self.get_endpoint_state(endpoint_id)
         if current == EndpointState.QUARANTINED:
             self.set_endpoint_state(endpoint_id, EndpointState.RECOVERING)
             logger.info("Admin restored endpoint %s from QUARANTINED to RECOVERING", endpoint_id)
             return EndpointState.RECOVERING
         return current
+
+    async def restore_and_publish(
+        self, endpoint_id: str, restored_at: datetime
+    ) -> EndpointState:
+        """
+        Operator restore on the live platform: QUARANTINED to RECOVERING,
+        a no-op in any other state. Applies ADR 0020, then announces the
+        transition on the policy topic so observers (the dashboard) see
+        RECOVERING immediately rather than at the next delivery attempt.
+        """
+        applied = self._apply_restore(endpoint_id, restored_at)
+        if applied is not None:
+            eri, policy, record = applied
+            await self._publish_evaluation(
+                endpoint_id=endpoint_id,
+                eri=eri,
+                state_before=EndpointState.QUARANTINED,
+                state_after=EndpointState.RECOVERING,
+                policy=policy,
+                explainability_record=record,
+                computed_at=restored_at,
+                window_size=0,
+            )
+        return self.get_endpoint_state(endpoint_id)
+
+    def _apply_restore(
+        self, endpoint_id: str, restored_at: datetime
+    ) -> Optional[Tuple[ERIScore, DeliveryPolicy, ExplainabilityRecord]]:
+        """
+        QUARANTINED -> RECOVERING, per ADR 0020.
+
+        Flipping the state alone does not restore delivery. The cached
+        QUARANTINE policy would keep being served, and the sliding window
+        still holds the outage, so the first observation after restore
+        would score below the quarantine threshold and re-quarantine the
+        endpoint. Recovery is therefore judged only on evidence gathered
+        after the restore: the window is reset and the RECOVERING policy
+        replaces the cached one.
+        """
+        if self.get_endpoint_state(endpoint_id) != EndpointState.QUARANTINED:
+            return None
+
+        self._telemetry_windows[endpoint_id] = []
+        self._restored_at[endpoint_id] = restored_at
+        self.set_endpoint_state(endpoint_id, EndpointState.RECOVERING)
+
+        eri = ERIScore.perfect(window_size=0, computed_at=restored_at)
+        policy, record = synthesize_policy(
+            endpoint_id=endpoint_id,
+            state_before=EndpointState.QUARANTINED,
+            state_after=EndpointState.RECOVERING,
+            eri=eri,
+            thresholds=self._thresholds,
+            computed_at=restored_at,
+        )
+        record = record.model_copy(
+            update={
+                "reason": (
+                    "Admin restore: endpoint moved from QUARANTINED to RECOVERING. "
+                    "ERI window reset; recovery is judged on attempts started after the restore."
+                ),
+            }
+        )
+        self._explainability_repo.save(record)
+        try:
+            self._cache.set_policy(
+                endpoint_id=endpoint_id,
+                policy=policy,
+                ttl_seconds=300,
+            )
+        except Exception:
+            logger.exception("Failed to update policy cache for endpoint %s", endpoint_id)
+
+        logger.info("Admin restored endpoint %s from QUARANTINED to RECOVERING", endpoint_id)
+        return eri, policy, record
+
+    def _predates_restore(self, telemetry: Telemetry) -> bool:
+        """True for an attempt that began before the last restore of its endpoint."""
+        restored_at = self._restored_at.get(telemetry.endpoint_id)
+        if restored_at is None:
+            return False
+        started_at = telemetry.observed_at - timedelta(milliseconds=telemetry.latency_ms)
+        return started_at < restored_at
 
     def get_sliding_window_eri(self, endpoint_id: str, computed_at: Optional[datetime] = None) -> ERIScore:
         """Return the current ERI score over the active sliding window."""
@@ -159,6 +252,28 @@ class AEDEService:
         """
         endpoint_id = telemetry.endpoint_id
         computed_at = telemetry.observed_at
+
+        if self._predates_restore(telemetry):
+            # An attempt already in flight when the operator restored the
+            # endpoint describes the outage, not the recovery. Counting it
+            # would re-quarantine on stale evidence (ADR 0020). The
+            # observation itself is still persisted by the Worker.
+            logger.info(
+                "Excluding pre-restore telemetry from ERI window attempt_id=%s endpoint_id=%s",
+                telemetry.attempt_id,
+                endpoint_id,
+            )
+            current_state = self.get_endpoint_state(endpoint_id)
+            eri = self.get_sliding_window_eri(endpoint_id, computed_at=computed_at)
+            policy, explainability_record = synthesize_policy(
+                endpoint_id=endpoint_id,
+                state_before=current_state,
+                state_after=current_state,
+                eri=eri,
+                thresholds=self._thresholds,
+                computed_at=computed_at,
+            )
+            return eri, current_state, policy, explainability_record
 
         # 1. Update sliding window
         window = self._telemetry_windows.setdefault(endpoint_id, [])
@@ -212,48 +327,72 @@ class AEDEService:
             logger.exception("Failed to update policy cache for endpoint %s", endpoint_id)
 
         # 7. Construct and publish PolicyEvaluation event to Kafka
-        if self._publish_events:
-            try:
-                evaluation = PolicyEvaluation(
-                    endpoint_id=endpoint_id,
-                    policy_id=policy.policy_id,
-                    explainability_record_id=explainability_record.record_id,
-                    eri_score=eri.score,
-                    state_before=current_state.value,
-                    state_after=new_state.value,
-                    state_changed=(current_state != new_state),
-                    strategy_used="STRATEGY_C",
-                    is_fallback=False,
-                    fallback_tier=1,
-                    evaluated_at=computed_at or datetime.now(timezone.utc),
-                    window_size=len(window),
-                )
-                bundle = {
-                    "endpoint_id": endpoint_id,
-                    "state": new_state.value,
-                    "eri_score": eri.model_dump(mode="json"),
-                    "policy_evaluation": evaluation.model_dump(mode="json"),
-                    "delivery_policy": policy.model_dump(mode="json"),
-                    "explainability_record": explainability_record.model_dump(mode="json"),
-                }
-                payload = json.dumps(bundle, default=str).encode("utf-8")
-                if self._publisher is not None:
-                    res = self._publisher(EVENTS_INTERNAL_POLICY_TOPIC, endpoint_id, payload)
-                    if asyncio.iscoroutine(res):
-                        await asyncio.wait_for(res, timeout=PUBLISH_EVENT_TIMEOUT_SECONDS)
-                else:
-                    await asyncio.wait_for(
-                        publish(EVENTS_INTERNAL_POLICY_TOPIC, key=endpoint_id, value=payload),
-                        timeout=PUBLISH_EVENT_TIMEOUT_SECONDS,
-                    )
-            except Exception as exc:
-                # repr(), not str() -- TimeoutError's str() is "", which previously
-                # logged as a blank, undiagnosable warning (e.g. "...endpoint x: ").
-                logger.warning(
-                    "Failed to publish policy evaluation event for endpoint %s: %s: %r",
-                    endpoint_id,
-                    type(exc).__name__,
-                    exc,
-                )
+        await self._publish_evaluation(
+            endpoint_id=endpoint_id,
+            eri=eri,
+            state_before=current_state,
+            state_after=new_state,
+            policy=policy,
+            explainability_record=explainability_record,
+            computed_at=computed_at,
+            window_size=len(window),
+        )
 
         return eri, new_state, policy, explainability_record
+
+    async def _publish_evaluation(
+        self,
+        *,
+        endpoint_id: str,
+        eri: ERIScore,
+        state_before: EndpointState,
+        state_after: EndpointState,
+        policy: DeliveryPolicy,
+        explainability_record: ExplainabilityRecord,
+        computed_at: datetime,
+        window_size: int,
+    ) -> None:
+        if not self._publish_events:
+            return
+        try:
+            evaluation = PolicyEvaluation(
+                endpoint_id=endpoint_id,
+                policy_id=policy.policy_id,
+                explainability_record_id=explainability_record.record_id,
+                eri_score=eri.score,
+                state_before=state_before.value,
+                state_after=state_after.value,
+                state_changed=(state_before != state_after),
+                strategy_used="STRATEGY_C",
+                is_fallback=False,
+                fallback_tier=1,
+                evaluated_at=computed_at or datetime.now(timezone.utc),
+                window_size=window_size,
+            )
+            bundle = {
+                "endpoint_id": endpoint_id,
+                "state": state_after.value,
+                "eri_score": eri.model_dump(mode="json"),
+                "policy_evaluation": evaluation.model_dump(mode="json"),
+                "delivery_policy": policy.model_dump(mode="json"),
+                "explainability_record": explainability_record.model_dump(mode="json"),
+            }
+            payload = json.dumps(bundle, default=str).encode("utf-8")
+            if self._publisher is not None:
+                res = self._publisher(EVENTS_INTERNAL_POLICY_TOPIC, endpoint_id, payload)
+                if asyncio.iscoroutine(res):
+                    await asyncio.wait_for(res, timeout=PUBLISH_EVENT_TIMEOUT_SECONDS)
+            else:
+                await asyncio.wait_for(
+                    publish(EVENTS_INTERNAL_POLICY_TOPIC, key=endpoint_id, value=payload),
+                    timeout=PUBLISH_EVENT_TIMEOUT_SECONDS,
+                )
+        except Exception as exc:
+            # repr(), not str() -- TimeoutError's str() is "", which previously
+            # logged as a blank, undiagnosable warning (e.g. "...endpoint x: ").
+            logger.warning(
+                "Failed to publish policy evaluation event for endpoint %s: %s: %r",
+                endpoint_id,
+                type(exc).__name__,
+                exc,
+            )
