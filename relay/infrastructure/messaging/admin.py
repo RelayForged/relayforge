@@ -32,18 +32,12 @@ PLATFORM_TOPICS = (
 
 _ensured = False
 _lock: Optional[asyncio.Lock] = None
-_lock_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
 def _get_lock() -> asyncio.Lock:
-    global _lock, _lock_loop
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-    if _lock is None or _lock_loop is not loop or (loop is not None and loop.is_closed()):
+    global _lock
+    if _lock is None:
         _lock = asyncio.Lock()
-        _lock_loop = loop
     return _lock
 
 

@@ -64,7 +64,7 @@ def api(monkeypatch):
         return None
 
     monkeypatch.setattr("relay.api.events.publish", noop)
-    monkeypatch.setattr("relay.api.main.warmup_producer", noop)
+    monkeypatch.setattr("relay.api.main.ensure_topics", noop)
     monkeypatch.setattr("relay.api.main.close_producer", noop)
     app.dependency_overrides[deps.get_event_repository] = lambda: events
     app.dependency_overrides[deps.get_endpoint_repository] = lambda: endpoints

@@ -16,7 +16,6 @@ Run:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -24,18 +23,10 @@ from typing import Optional
 
 from pydantic import ValidationError
 
-from relay.control_plane.aede.service import AEDEService
-from relay.control_plane.aede.strategies import StrategyA, StrategyB, StrategyC
+from relay.control_plane.aede.strategies.static import StrategyA
 from relay.data_plane.retry_manager.manager import RetryManager, RetryWork
 from relay.data_plane.workers.webhook import WebhookWorker
-from relay.infrastructure.messaging.producer import warmup as warmup_producer
-from relay.infrastructure.cache import (
-    InMemoryPolicyCache,
-    PolicyCache,
-    PolicyFallbackManager,
-)
 from relay.infrastructure.feature_flags import FeatureFlags
-from relay.infrastructure.messaging.admin import EVENTS_INTERNAL_ENDPOINT_TOPIC
 from relay.infrastructure.messaging.consumer import (
     EVENTS_BUSINESS_TOPIC,
     EVENTS_INTERNAL_DELIVERY_TOPIC,
@@ -92,17 +83,9 @@ class Dispatcher:
         endpoints: Optional[EndpointRepository] = None,
         worker: Optional[WebhookWorker] = None,
         retry_manager: Optional[RetryManager] = None,
-        fallback_manager: Optional[PolicyFallbackManager] = None,
-        cache: Optional[PolicyCache] = None,
-        feature_flags: Optional[FeatureFlags] = None,
-        aede_service: Optional[AEDEService] = None,
     ) -> None:
         self._consumer = consumer or KafkaConsumer(
-            topics=(
-                EVENTS_BUSINESS_TOPIC,
-                EVENTS_INTERNAL_DELIVERY_TOPIC,
-                EVENTS_INTERNAL_ENDPOINT_TOPIC,
-            ),
+            topics=(EVENTS_BUSINESS_TOPIC, EVENTS_INTERNAL_DELIVERY_TOPIC),
             group_id=DISPATCHER_GROUP_ID,
         )
         self._subscriptions = subscriptions or SubscriptionRepository()
@@ -114,19 +97,10 @@ class Dispatcher:
             attempts=self._attempts,
         )
         self._retry_manager = retries
-
-        self._flags = feature_flags or FeatureFlags.from_env()
-        self._cache = cache or InMemoryPolicyCache()
-        self._fallback_manager = fallback_manager or PolicyFallbackManager(cache=self._cache)
-        self._aede_service = aede_service
-
         self._worker = worker or WebhookWorker(
             attempts=self._attempts,
             retry_manager=retries,
-            aede_service=self._aede_service,
         )
-        if getattr(self._worker, "_retry_manager", None) is None:
-            self._worker._retry_manager = self._retry_manager
 
         self._messages: set[asyncio.Task[None]] = set()
         self._scheduled: set[asyncio.Task[None]] = set()
@@ -138,20 +112,15 @@ class Dispatcher:
         )
         self._endpoint_slots: dict[str, asyncio.Semaphore] = {}
 
-        if self._flags.active_strategy_name == "STRATEGY_A":
-            self._strategy = StrategyA()
-        elif self._flags.active_strategy_name == "STRATEGY_B":
-            self._strategy = StrategyB()
-        else:
-            self._strategy = StrategyC()
-
-        logger.info(
-            "Dispatcher initialized with strategy=%s (AEDE=%s, ERI=%s, StateMachine=%s)",
-            self._strategy.strategy_name,
-            self._flags.aede_enabled,
-            self._flags.eri_enabled,
-            self._flags.state_machine_enabled,
-        )
+        self._strategy = StrategyA()
+        self._flags = FeatureFlags.from_env()
+        if self._flags.active_strategy_name != self._strategy.strategy_name:
+            logger.warning(
+                "Feature flags select %s but Week 3-4 forces %s; "
+                "set STATIC_RETRY_MODE=true to make the configuration explicit",
+                self._flags.active_strategy_name,
+                self._strategy.strategy_name,
+            )
 
     async def run(self) -> None:
         await self._consumer.start()
@@ -164,9 +133,6 @@ class Dispatcher:
             await self._worker.aclose()
 
     async def _accept(self, message: KafkaMessage) -> None:
-        if message.topic == EVENTS_INTERNAL_ENDPOINT_TOPIC:
-            await self._accept_endpoint_control(message)
-            return
         if message.topic == EVENTS_INTERNAL_DELIVERY_TOPIC:
             await self._accept_retry(message)
             return
@@ -174,25 +140,6 @@ class Dispatcher:
         task = asyncio.create_task(self._run_message(message))
         self._messages.add(task)
         task.add_done_callback(self._messages.discard)
-
-    async def _accept_endpoint_control(self, message: KafkaMessage) -> None:
-        """Handle internal endpoint control commands like manual admin restore."""
-        try:
-            data = json.loads(message.value)
-            action = data.get("action")
-            endpoint_id = data.get("endpoint_id")
-            if action == "restore" and endpoint_id and self._aede_service is not None:
-                self._aede_service.restore_endpoint(endpoint_id)
-                logger.info("Dispatcher applied manual restore for endpoint=%s", endpoint_id)
-        except Exception:
-            logger.exception(
-                "Skipping invalid endpoint control payload partition=%s offset=%s",
-                message.partition,
-                message.offset,
-            )
-        finally:
-            await self._consumer.commit(message)
-
 
     async def _run_message(self, message: KafkaMessage) -> None:
         try:
@@ -334,19 +281,12 @@ class Dispatcher:
             # Already resolved by an earlier delivery of this message.
             return
 
-        endpoint_state = getattr(endpoint, "state", EndpointState.AVAILABLE)
-        if self._aede_service is not None:
-            endpoint_state = self._aede_service.get_endpoint_state(subscription.endpoint_id)
-        elif isinstance(endpoint_state, str):
-            try:
-                endpoint_state = EndpointState(endpoint_state)
-            except ValueError:
-                endpoint_state = EndpointState.AVAILABLE
-
-        policy = self._get_delivery_policy(
-            endpoint_id=subscription.endpoint_id,
-            endpoint_state=endpoint_state,
-            computed_at=computed_at,
+        eri = ERIScore.perfect(window_size=0, computed_at=computed_at)
+        policy, _record = self._strategy.evaluate(
+            subscription.endpoint_id,
+            EndpointState.AVAILABLE,
+            eri,
+            computed_at,
         )
 
         if policy.isolation_policy.action in _SKIP_HTTP:
@@ -484,83 +424,9 @@ class Dispatcher:
             self._endpoint_slots[endpoint_id] = slot
         return slot
 
-    def _get_delivery_policy(
-        self,
-        endpoint_id: str,
-        endpoint_state: EndpointState,
-        computed_at: datetime,
-    ) -> DeliveryPolicy:
-        """
-        Queries delivery policy dynamically using the Three-Tier Policy Fallback Hierarchy (ADR 0011):
-        Tier 1: Live active strategy evaluation (AEDE / Strategy C/B/A) -> updates policy cache.
-        Tier 2: Redis / In-memory cached policy (within 300s TTL).
-        Tier 3: Static fallback defaults (safe Strategy A baseline).
-        """
-        # Tier 1: Live AEDE service or strategy evaluation
-        if self._flags.aede_enabled and self._aede_service is not None:
-            try:
-                policy = self._aede_service.get_current_policy(
-                    endpoint_id, computed_at=computed_at
-                )
-                try:
-                    self._cache.set_policy(endpoint_id, policy, ttl_seconds=300)
-                except Exception:
-                    pass
-                return policy
-            except Exception as e:
-                logger.warning(
-                    "Tier 1 AEDE live policy evaluation failed for %s (%s); querying Tier 2 cache",
-                    endpoint_id,
-                    e,
-                )
-        elif self._flags.aede_enabled:
-            try:
-                eri = ERIScore.perfect(window_size=0, computed_at=computed_at)
-                res = self._strategy.evaluate(
-                    endpoint_id=endpoint_id,
-                    endpoint_state=endpoint_state,
-                    eri=eri,
-                    computed_at=computed_at,
-                )
-                policy = res[0] if isinstance(res, tuple) else res
-                try:
-                    self._cache.set_policy(endpoint_id, policy, ttl_seconds=300)
-                except Exception:
-                    pass
-                return policy
-            except Exception as e:
-                logger.warning(
-                    "Tier 1 policy evaluation failed for %s (%s); querying Tier 2 cache",
-                    endpoint_id,
-                    e,
-                )
-
-        # Tier 2: Cached Policy
-        cached = self._fallback_manager.get_tier_2_cached_policy(
-            endpoint_id, current_time=computed_at
-        )
-        if cached is not None:
-            logger.info("Serving Tier 2 cached policy for %s", endpoint_id)
-            return cached
-
-        # Tier 3: Static Fallback Policy (Strategy A defaults)
-        logger.warning("Serving Tier 3 static fallback policy for %s", endpoint_id)
-        return self._fallback_manager.get_tier_3_static_policy(
-            endpoint_id, computed_at=computed_at
-        )
-
 
 async def run() -> None:
-    flags = FeatureFlags.from_env()
-    # Pay the producer's cold-start cost (ensure_topics + AIOKafkaProducer.start,
-    # ~8s combined against a real broker) once here, eagerly -- otherwise it
-    # lands inside AEDEService.record_telemetry()'s 5s publish timeout on
-    # whichever telemetry event happens to be the first one in, and fails
-    # silently (see relay/infrastructure/messaging/producer.py::warmup).
-    await warmup_producer()
-    cache = InMemoryPolicyCache()
-    aede = AEDEService(cache=cache) if flags.aede_enabled else None
-    await Dispatcher(aede_service=aede, cache=cache, feature_flags=flags).run()
+    await Dispatcher().run()
 
 
 def main() -> None:

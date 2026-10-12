@@ -14,7 +14,6 @@ import pytest
 
 from relay.data_plane.dispatcher.main import Dispatcher
 from relay.data_plane.retry_manager.manager import RetryWork
-from relay.infrastructure.feature_flags import FeatureFlags
 from relay.infrastructure.messaging.consumer import (
     EVENTS_BUSINESS_TOPIC,
     EVENTS_INTERNAL_DELIVERY_TOPIC,
@@ -73,9 +72,6 @@ def build_dispatcher(
     consumer,
     worker=None,
     endpoints=None,
-    feature_flags=None,
-    cache=None,
-    fallback_manager=None,
 ):
     return Dispatcher(
         consumer=consumer,
@@ -84,9 +80,6 @@ def build_dispatcher(
         attempts=attempts,
         endpoints=endpoints or FakeEndpointRepository(),
         worker=worker or RecordingWorker(),
-        feature_flags=feature_flags,
-        cache=cache,
-        fallback_manager=fallback_manager,
     )
 
 
@@ -494,7 +487,6 @@ async def test_max_parallel_one_serializes_calls_to_an_endpoint(
         attempts=attempts,
         consumer=consumer,
         worker=worker,
-        feature_flags=FeatureFlags(static_retry_mode=True),
     )
 
     await dispatcher.handle_message(business_message(make_event("OrderCreated")))
@@ -646,123 +638,3 @@ async def test_invalid_retry_payload_is_committed(deliveries, attempts, consumer
     await dispatcher._accept_retry(poison)
 
     assert consumer.committed == [9]
-
-
-# --------------------------------------------------------------------------
-# Dynamic Strategy & Three-Tier Policy Fallback Tests (Task T-002)
-# --------------------------------------------------------------------------
-
-
-def test_dispatcher_strategy_selection_from_flags():
-    """Verify Dispatcher initializes Strategy A, B, or C based on FeatureFlags."""
-    # 1. Strategy C (default)
-    d_c = Dispatcher(feature_flags=FeatureFlags())
-    assert d_c._strategy.strategy_name == "STRATEGY_C"
-
-    # 2. Strategy B (adaptive retry mode)
-    d_b = Dispatcher(feature_flags=FeatureFlags(adaptive_retry_mode=True))
-    assert d_b._strategy.strategy_name == "STRATEGY_B"
-
-    # 3. Strategy A (static retry mode or aede disabled)
-    d_a = Dispatcher(feature_flags=FeatureFlags(static_retry_mode=True))
-    assert d_a._strategy.strategy_name == "STRATEGY_A"
-
-    d_a2 = Dispatcher(feature_flags=FeatureFlags(aede_enabled=False))
-    assert d_a2._strategy.strategy_name == "STRATEGY_A"
-
-
-async def test_dispatcher_three_tier_fallback_hierarchy(deliveries, attempts, consumer):
-    """Verify Three-Tier Fallback: Tier 1 (live) -> Tier 2 (cached) -> Tier 3 (static)."""
-    from relay.infrastructure.cache import InMemoryPolicyCache, PolicyFallbackManager
-    from relay.kernel.value_objects.endpoint_state import EndpointState
-
-    cache = InMemoryPolicyCache()
-    fallback_mgr = PolicyFallbackManager(cache=cache)
-    subscription, endpoint = make_target("OrderCreated")
-
-    dispatcher = build_dispatcher(
-        targets=[(subscription, endpoint)],
-        deliveries=deliveries,
-        attempts=attempts,
-        consumer=consumer,
-        cache=cache,
-        fallback_manager=fallback_mgr,
-    )
-
-    now = datetime.now(timezone.utc)
-
-    # Tier 1: normal Strategy C evaluation populates cache
-    policy_tier1 = dispatcher._get_delivery_policy(
-        endpoint_id=endpoint.endpoint_id,
-        endpoint_state=EndpointState.AVAILABLE,
-        computed_at=now,
-    )
-    assert policy_tier1 is not None
-    assert cache.get_policy(endpoint.endpoint_id) is not None
-
-    # Tier 2: simulate Tier 1 failure when cache is populated
-    class BrokenStrategy:
-        strategy_name = "BROKEN"
-
-        def evaluate(self, *a, **k):
-            raise RuntimeError("AEDE Service Unreachable")
-
-    dispatcher._strategy = BrokenStrategy()
-    policy_tier2 = dispatcher._get_delivery_policy(
-        endpoint_id=endpoint.endpoint_id,
-        endpoint_state=EndpointState.AVAILABLE,
-        computed_at=now,
-    )
-    assert policy_tier2 is not None
-    assert policy_tier2.policy_id == policy_tier1.policy_id
-
-    # Tier 3: simulate Tier 1 failure and cache cold/expired
-    cache.clear()
-    policy_tier3 = dispatcher._get_delivery_policy(
-        endpoint_id=endpoint.endpoint_id,
-        endpoint_state=EndpointState.AVAILABLE,
-        computed_at=now,
-    )
-    assert policy_tier3 is not None
-    assert policy_tier3.concurrency_policy.max_parallel == 1
-    assert policy_tier3.retry_policy.initial_delay_seconds == 5.0
-    assert policy_tier3.retry_policy.max_retries == 10
-
-
-async def test_dispatcher_quarantine_retains_delivery_pending(deliveries, attempts, consumer):
-    """Verify an endpoint in QUARANTINED state (via cached policy) retains delivery in PENDING without HTTP calls."""
-    from relay.infrastructure.cache import InMemoryPolicyCache
-    from relay.kernel.policies.delivery_policy import IsolationAction
-
-    cache = InMemoryPolicyCache()
-    subscription, endpoint = make_target("OrderCreated")
-    quarantined_policy = make_policy(isolation=IsolationAction.QUARANTINE)
-    cache.set_policy(endpoint.endpoint_id, quarantined_policy)
-
-    worker = RecordingWorker()
-    dispatcher = build_dispatcher(
-        targets=[(subscription, endpoint)],
-        deliveries=deliveries,
-        attempts=attempts,
-        consumer=consumer,
-        worker=worker,
-        cache=cache,
-    )
-
-    # When live AEDE fails, Tier 2 cached QUARANTINE policy is served and enforced
-    class OfflineAEDE:
-        strategy_name = "OFFLINE"
-
-        def evaluate(self, *a, **k):
-            raise RuntimeError("AEDE Offline")
-
-    dispatcher._strategy = OfflineAEDE()
-
-    event = make_event("OrderCreated")
-    await dispatcher.handle_message(business_message(event))
-
-    assert worker.calls == [], "made HTTP calls for a quarantined endpoint"
-    assert attempts.numbers() == [], "wrote attempt row for a quarantined endpoint"
-    assert deliveries.only().status == "PENDING"
-    assert consumer.committed == [0]
-
