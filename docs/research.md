@@ -144,10 +144,6 @@ Only the delivery strategy changes between experiments. All other variables (har
 | 8 | Rate Limiting — HTTP 429 responses |
 | 9 | Network Partition — temporary communication loss |
 | 10 | Slow Degradation — endpoint gradually becomes unstable (best demonstrates AEDE advantage) |
-| 11 | Bursty Traffic Under Degradation — two burst windows dropping success rate to 40% then 20% across 170 events; supplementary, calibration-only check of ERI sliding-window reactivity |
-| 12 | Re-Quarantine Relapse — recovering endpoint suffers secondary failure spike testing fast re-isolation |
-| 13 | Rapid Micro-Flapping — high-frequency oscillations testing hysteresis dampening and transition bounds |
-| 14 | Long Sustained Mild Degradation — prolonged mild degradation (75% success across 400 events) testing conservative degradation handling |
 
 ### Experimental Reproducibility
 
@@ -166,13 +162,11 @@ Multiple runs per experiment. Reported metrics include mean, median, standard de
 
 ### Threats to Validity
 
-**Internal validity — threshold and weight sensitivity**: AEDE's policy decisions depend on configured ERI weights and state machine thresholds. Different configurations may produce different relative performance between strategies. *Mitigation*: all weights and thresholds are disclosed and held constant across strategy comparisons. An automated empirical weight sensitivity analysis (28 systematic perturbations of $\pm 10\%$ and $\pm 20\%$ across all 7 dimensions) demonstrated 100% stability, zero false quarantines, and preserved state machine hysteresis stability across the entire parameter space.
+**Internal validity — threshold and weight sensitivity**: AEDE's policy decisions depend on configured ERI weights and state machine thresholds. Different configurations may produce different relative performance between strategies. *Mitigation*: all weights and thresholds are disclosed and held constant across strategy comparisons. A secondary weight sensitivity analysis (3–4 alternative configurations) is planned to demonstrate that the framework's advantage holds across reasonable weight variations, even if absolute performance differs.
 
-**Construct validity — calibration vs. evaluation split (weight selection leakage)**: Evaluating weight configurations on the same scenarios used for hypothesis testing risks circular reasoning (training on the test set). *Mitigation*: we enforce a strict partition between the calibration set ($\{1, 2, 6, 7, 8, 11\}$) and the held-out evaluation set ($\{3, 4, 5, 9, 10, 12, 13, 14\}$). Weight calibration (`optimize_weights.py`) and evolutionary search (`genetic_optimizer.py`) observe only the calibration scenarios (including supplementary Scenario 11, which stresses ERI sliding-window reactivity under bursty success-rate degradation). Hypotheses 1, 2, and 3 are evaluated strictly on the held-out set, ensuring headline metrics and statistical tests reflect genuine generalisation to unseen failure modes.
+**Internal validity — single-endpoint evaluation**: MVP experiments evaluate AEDE against a single endpoint. Production systems deliver to many concurrent endpoints, where worker contention, shared queue depth, and cross-endpoint policy interactions may affect results. *Acknowledgment*: multi-endpoint evaluation is noted as future work. The single-endpoint design isolates the policy engine's behavior from scheduling effects, which is appropriate for validating the framework's core mechanism.
 
-**Internal validity — single-endpoint evaluation**: MVP experiments evaluate AEDE against a single endpoint. Production systems deliver to many concurrent endpoints, where worker contention, shared queue depth, and cross-endpoint policy interactions may affect results. *Mitigation*: a concurrent multi-endpoint contention benchmark (`benchmark/multi_endpoint.py`) models shared worker pools under load from both failing and healthy tenants, evaluating noisy-neighbor isolation directly.
-
-**External validity — synthetic failure patterns**: The Endpoint Simulator produces controlled, parameterized failures. Real-world endpoints exhibit correlated failures, ambiguous partial responses (e.g., HTTP 200 with error body), deployment-window behavior, and rate-limit patterns that may not match the simulator's modes. *Mitigation*: the simulator's four failure modes (http_error, timeout, slow, rate_limit) cover the most common failure signatures observed in production webhook systems. The 14 scenarios (6 calibration, 8 held-out) are designed to be representative, not exhaustive.
+**External validity — synthetic failure patterns**: The Endpoint Simulator produces controlled, parameterized failures. Real-world endpoints exhibit correlated failures, ambiguous partial responses (e.g., HTTP 200 with error body), deployment-window behavior, and rate-limit patterns that may not match the simulator's modes. *Mitigation*: the simulator's four failure modes (http_error, timeout, slow, rate_limit) cover the most common failure signatures observed in production webhook systems. The ten evaluation scenarios are designed to be representative, not exhaustive.
 
 **External validity — controlled event volume**: Experiments use a fixed event publication rate. Production systems experience bursty, non-uniform event volumes that interact with queue depth and ERI computation. *Acknowledgment*: variable-rate event publication is a future evaluation dimension.
 
@@ -203,7 +197,7 @@ These claims must be validated experimentally, not assumed.
 
 Before stating the contributions, it is important to be precise about what this work does **not** claim:
 
-- **The ERI weights are not claimed to be globally optimal.** They are calibrated via a genetic-algorithm search over the calibration scenario set (§ Threats to Validity), disclosed in full, and re-verified against the held-out evaluation set before adoption — a documented, reproducible calibration, not a hand-picked guess, but also not a claim of global optimality. The weighting model itself is not the research contribution. A fully unconstrained search over the true global objective would require ground-truth failure labels beyond what the current scenario suite provides, which is out of scope.
+- **The ERI weights are not claimed to be optimal.** The weights (35% success rate, 20% latency, etc.) are a documented design parameter — a reasonable starting configuration. The weighting model itself is not the research contribution. Optimal weight discovery would require a separate experiment with access to ground-truth failure labels, which is out of scope.
 - **AEDE is not a machine learning system.** No model is trained. No parameters are learned from data. The engine is deterministic and rule-based by design (see ADR 0004).
 - **This work does not propose a new retry algorithm.** Strategy B (adaptive backoff) is the closest existing approach. AEDE's contribution is the layer above the retry interval — the state model and policy framework that determines *when and whether* to retry at all.
 
@@ -227,16 +221,13 @@ This is a systems/architecture contribution. The ERI weights and state machine t
 
 ## Secondary Contribution (Weight Sensitivity Analysis)
 
-An empirical weight sensitivity analysis (`benchmark/sensitivity_analysis.py`) systematically evaluates 28 perturbations of $\pm 10\%$ and $\pm 20\%$ across all seven ERI weight dimensions against formal stability bounds. The analysis confirms:
-- **Zero false quarantines** under nominal and high-latency traffic across all 28 perturbations.
-- **Flapping stability preserved**: state transitions in partial recovery (Scenario 5) remain bounded at $\le 5$ transitions.
-- **Resilient retry reduction**: outage retry reduction vs Strategy A remains robust ($\ge 50\%$ across all variations).
+If time permits, a lightweight weight sensitivity analysis should be included as a secondary experiment: test 3–4 alternative ERI weight configurations and show that the framework's benefit over Strategy A and B holds across configurations, even if absolute performance varies. This preempts the obvious panel question ("how do you know these weights are any good?") without requiring full weight optimization. The claim would be: *the framework's advantage is robust to reasonable variation in the ERI weights*, not that any specific configuration is optimal.
 
-This demonstrates that the framework's advantage is robust to variation in ERI weights and occupies a wide, resilient basin rather than an overfitted local optimum.
+This is a bonus section, not a primary contribution. Do not block the primary evaluation on it.
 
 ## Future Work: Offline Reinforcement Learning for Weight Optimisation
 
-The current ERI implementation uses static weights discovered by an offline genetic-algorithm search over a fixed calibration scenario set (not hand-picked, but also not learned from live operational data). These weights are disclosed design parameters — defaults calibrated and validated through benchmark experiments, then frozen for deterministic production use. The architecture naturally accommodates a more principled, data-driven weight discovery process through **offline reinforcement learning**, which would replace the fixed calibration scenario suite with real operational telemetry as the training signal.
+The current ERI implementation uses expert-defined, static weights (e.g., 35% success rate, 20% latency). These weights are disclosed design parameters — reasonable defaults validated through benchmark experiments. However, the architecture naturally accommodates a more principled weight discovery process through **offline reinforcement learning**.
 
 ### Motivation
 
@@ -288,7 +279,7 @@ Online RL (adjusting weights during live delivery) was considered and rejected f
 
 ### Scope
 
-This is documented as future work. The current implementation demonstrates that the AEDE architecture produces measurably better delivery outcomes with weights discovered by an offline, scenario-based search. The offline RL extension would demonstrate that the architecture can push this further and *discover* weights from real operational data instead of a fixed synthetic scenario suite — without any structural changes to the policy engine, the explainability system, or the Control Plane / Data Plane boundary.
+This is documented as future work. The current implementation demonstrates that the AEDE architecture produces measurably better delivery outcomes with expert-defined weights. The offline RL extension would demonstrate that the architecture can also *discover* better weights from operational data — without any structural changes to the policy engine, the explainability system, or the Control Plane / Data Plane boundary.
 
 ---
 

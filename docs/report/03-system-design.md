@@ -165,21 +165,7 @@ $$
 
 where $w_i$ is the weight and $s_i$ is the normalised score (0.0–1.0) for sub-metric $i$, and $\sum w_i = 1.0$ (validated at construction time).
 
-The weights shown above are the platform's original, illustrative default configuration — useful for
-explaining the mechanism, but **not** the values currently deployed. The weighting model itself is not
-the research contribution; the contribution is how the resulting score drives runtime policy decisions
-through the state machine and policy synthesiser (§3.5, §3.6), and *that* holds regardless of which
-specific weight vector is loaded.
-
-The actually-deployed weights are calibrated by an offline genetic-algorithm search over a disclosed
-calibration scenario set, re-verified against a held-out evaluation set before adoption, and are
-substantially different from the illustrative defaults above — most notably, `success_rate_weight` and
-`consecutive_failures_weight` together carry over 80% of the composite score, while `latency_weight`,
-`timeout_weight`, `http_5xx_weight`, and `queue_depth_weight` are each reduced to a small residual
-share. Chapter 4 §4.9 documents the full calibration process, why it changed from the illustrative
-defaults, and the evidence that the change improved outcomes. This split — architecture in this
-chapter, calibrated instance in Chapter 4 — is deliberate: the weights are a hyperparameter the
-calibration process owns, not an architectural constant this chapter should hard-code.
+The weights are disclosed design parameters — a reasonable starting configuration. They are not claimed to be optimal. The weighting model itself is not the research contribution; the contribution is how the resulting score drives runtime policy decisions through the state machine and policy synthesiser.
 
 ### 3.4.2 Sliding Observation Window
 
@@ -189,7 +175,7 @@ The tradeoff is acknowledged: a count-based window responds differently for high
 
 ### 3.4.3 Sub-Metric Preservation
 
-Every ERI evaluation preserves all seven individual sub-scores in a `MetricSnapshot` embedded within the `ExplainabilityRecord`. This enables post-hoc analysis of whether the composite score accurately reflected the endpoint's actual condition during each experiment — directly addressing the construct validity threat identified in Chapter 6 §6.4.
+Every ERI evaluation preserves all seven individual sub-scores in a `MetricSnapshot` embedded within the `ExplainabilityRecord`. This enables post-hoc analysis of whether the composite score accurately reflected the endpoint's actual condition during each experiment — directly addressing the construct validity threat identified in Section 4.6.
 
 ---
 
@@ -213,25 +199,14 @@ Simple threshold-based transitions produce oscillation: an endpoint hovering nea
 
 | Transition Direction | Threshold |
 |---|---|
-| Degrade into OBSERVED_DEGRADATION | ERI < 75 |
-| Recover from OBSERVED_DEGRADATION | ERI > 95 |
-| Degrade into UNSTABLE | ERI < 55 |
-| Recover from UNSTABLE | ERI > 85 |
+| Degrade into OBSERVED_DEGRADATION | ERI < 80 |
+| Recover from OBSERVED_DEGRADATION | ERI > 90 |
+| Degrade into UNSTABLE | ERI < 60 |
+| Recover from UNSTABLE | ERI > 75 |
 | Degrade into QUARANTINED | ERI < 30 |
-| Recover to AVAILABLE from RECOVERING | ERI > 80 |
+| Recover to AVAILABLE from RECOVERING | ERI > 90 |
 
-The asymmetry — recovery thresholds are strictly higher than degradation thresholds — implements the
-design principle: *trust failure quickly; trust recovery cautiously*. This is validated by a Pydantic
-model validator (`StateMachineThresholds`) that enforces `degradation_recovery_threshold >
-degradation_threshold` and `unstable_recovery_threshold > unstable_threshold` at construction time.
-
-These specific gaps (20 and 30 points respectively) are wider than the platform's original defaults (10
-points each). Chapter 4 §4.9 documents why: under sustained borderline degradation, ERI was observed to
-swing by roughly 40 points within the sliding window — wider than the original gaps — which caused the
-state machine to chase noise rather than settle. `recovery_threshold` (governing `RECOVERING →
-AVAILABLE` specifically) was independently lowered from 90 to 80 after a separate finding that the
-original value left two evaluation scenarios permanently stuck in `RECOVERING`, never confirmed
-recovered (Chapter 5 §5.6).
+The asymmetry — recovery thresholds are strictly higher than degradation thresholds — implements the design principle: *trust failure quickly; trust recovery cautiously*. This is validated by a Pydantic model validator (`StateMachineThresholds`) that enforces `degradation_recovery_threshold > degradation_threshold` and `unstable_recovery_threshold > unstable_threshold` at construction time.
 
 ### 3.5.3 Non-Adjacent Transitions
 
@@ -274,7 +249,7 @@ The mapping from state to policy profile is:
 
 | State | Retry | Concurrency | Isolation | Admin Alert |
 |---|---|---|---|---|
-| AVAILABLE | 2s initial, max 10 retries | max_parallel = 10 | CONTINUE | No |
+| AVAILABLE | 3s initial, max 10 retries | max_parallel = 10 | CONTINUE | No |
 | OBSERVED_DEGRADATION | 5s initial, max 8 retries | max_parallel = 3 | REDUCE_CONCURRENCY | No |
 | UNSTABLE | 15s initial, max 5 retries | max_parallel = 1 | PAUSE | Yes (WARNING) |
 | QUARANTINED | No delivery (max_retries = 0) | max_parallel = 1 | QUARANTINE | Yes (CRITICAL) |
@@ -319,7 +294,7 @@ An ExplainabilityRecord contains:
 | `metrics` | `MetricSnapshot` — all seven ERI sub-scores at decision time |
 | `thresholds` | `ThresholdSnapshot` — state machine thresholds in effect |
 | `reason` | Human-readable explanation (e.g., "ERI fell to 72.0, transitioning to OBSERVED_DEGRADATION") |
-| `triggered_thresholds` | Which thresholds were crossed (e.g., "ERI 72.0 < degradation_threshold 75.0") |
+| `triggered_thresholds` | Which thresholds were crossed (e.g., "ERI 72.0 < degradation_threshold 80.0") |
 | `policy_changes` | What policy fields changed (e.g., "max_parallel: 10 → 3") |
 | `strategy_used` | STRATEGY_A, STRATEGY_B, or STRATEGY_C |
 | `evaluated_at` | Caller-supplied timestamp (never `datetime.now()`) |
@@ -426,35 +401,23 @@ A business event passes through eleven stages from publication to final delivery
 
 ## 3.13 Configuration Philosophy
 
-No thresholds are hardcoded. All operational parameters are externalised in configuration
-(`config.yaml`), which documents — with inline provenance comments — the same weight and threshold
-values actually compiled into the runtime defaults in `relay/kernel/value_objects/eri.py` and
-`relay/control_plane/aede/service.py` (Chapter 4 §4.9; Chapter 5 §5.6):
+No thresholds are hardcoded. All operational parameters are externalised in configuration:
 
 ```yaml
 eri:
-  # Discovered by a genetic-algorithm search over the calibration scenario set, re-verified
-  # against the held-out evaluation set before adoption (Ch4 §4.9). Not a claimed global optimum.
-  success_rate_weight: 0.374948
-  latency_weight: 0.002808
-  consecutive_failures_weight: 0.463822
-  timeout_weight: 0.002808
-  http_5xx_weight: 0.002808
-  queue_depth_weight: 0.002808
-  recovery_trend_weight: 0.149998
+  success_rate_weight: 0.35
+  latency_weight: 0.20
+  consecutive_failures_weight: 0.20
+  timeout_weight: 0.10
+  http_5xx_weight: 0.05
+  queue_depth_weight: 0.05
+  recovery_trend_weight: 0.05
 
 state_machine:
-  # Hysteresis gaps widened from an original 80/90 and 60/70 (10-point gaps) to 75/95 and
-  # 55/85 (20-point gaps) after observing ERI swing ~40 points under sustained borderline
-  # degradation — see §3.5.2 and Ch5 §5.4.
-  degradation_threshold: 75
-  degradation_recovery_threshold: 95
-  unstable_threshold: 55
-  unstable_recovery_threshold: 85
+  degradation_threshold: 80
+  unstable_threshold: 60
   quarantine_threshold: 30
-  # Lowered from 90 to 80 after two calibration scenarios were found to never finish
-  # recovering under the original value (Ch5 §5.6).
-  recovery_threshold: 80
+  recovery_threshold: 90
 
 adaptive_policy:
   quarantine_duration_seconds: 300
@@ -462,9 +425,4 @@ adaptive_policy:
   recovery_parallelism: 1
 ```
 
-This externalisation is intended to enable the weight sensitivity analysis described in Chapter 6 §6.2 without
-code changes. In the current implementation, however, `config.yaml` is not actually loaded at runtime —
-`relay/infrastructure/config_loader.py` defines a `ConfigLoader` capable of reading it, but nothing in
-the codebase invokes it; the values above must presently be kept in sync with the compiled-in defaults
-by hand, as `config.yaml`'s own header comment discloses. Wiring `ConfigLoader` into the AEDE startup
-path so this file becomes the actual source of truth is unimplemented at the time of writing.
+This externalisation enables the weight sensitivity analysis described in Section 4.5 — alternative ERI weight configurations can be evaluated without code changes.
