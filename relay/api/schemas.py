@@ -83,10 +83,3 @@ class CreateSubscriptionRequest(BaseModel):
                     f"each event_type must be 1..{MAX_EVENT_TYPE_LENGTH} characters"
                 )
         return value
-
-
-class RestoreEndpointResponse(BaseModel):
-    status: str
-    endpoint_id: str
-    target_state: str
-
