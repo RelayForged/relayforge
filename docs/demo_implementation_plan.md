@@ -241,6 +241,12 @@ A prominent **"Demo Scenarios" control panel** with large labeled buttons. Each 
 - The demo router is mounted only when `RELAY_DEMO_ENABLED=true`.
 - Additional endpoints: `GET /demo/scenarios`, `GET /demo/status`, `POST /demo/stop`.
 
+**[Built]** Observed on the compose stack:
+- Full Outage goes from `OBSERVED_DEGRADATION` straight to `QUARANTINED` in about 6 s and does not pass through `UNSTABLE` (the compose quarantine threshold is 45).
+- Recovery reaches `AVAILABLE` about 3 s after restore: the first good probe ends `RECOVERING`. A longer, visible probation needs a minimum sample count in the state machine, which is not built.
+- `DEMO_TARGET_URL` is optional and defaults to `SIMULATOR_URL` + `/webhook`; compose does not set it.
+- Person B made the compose changes for this task.
+
 ### Division of Work
 - **Person B (Sam)**:
   - Create `relay/api/demo.py` with `POST /demo/scenario` (configures simulator, launches background event publishing task).
@@ -325,8 +331,12 @@ A dedicated **"Benchmark" tab** in the dashboard with:
    **[Audit]** The numbers above are placeholders. Measured on scenario 10 (seed 42): success rate is
    0.6423 for A, B and C; wasted retries are 930 / 626 / 428; recovery time is 0 / 0 / 187 events
    (A and B have no state machine). Cards must render the `comparison` object computed by the API.
-   Proposed headline metrics: wasted retries and total retry delay; no MTTR card unless recovery
-   time is defined for A and B.
+   Headline metric: wasted retries. No MTTR card unless recovery time is defined for A and B.
+
+   **[Built]** Over the 8 held-out scenarios (seed 42) C cuts wasted retries by 79.7% against A
+   and 67.0% against B, with the same mean success rate (0.5912). Do not present total retry
+   delay as a win: C's is far higher (190,646 s against 4,435 s for A and 13,340 s for B)
+   because it deliberately waits and quarantines. The API returns all three.
 
 ### Division of Work
 - **Person B (Sam)**:
@@ -358,6 +368,8 @@ The MVP checklist explicitly requires "Replay from DLQ works without mutating hi
 - Republishing a dead event to `events.business` is a no-op: the delivery is unique on `(event_id, subscription_id)`, terminal deliveries return early, and attempt 1 is already claimed.
 - Replay design: the API-side `ReplayManager` publishes one request per delivery to a new topic `events.internal.replay`. The dispatcher handles it through the normal dispatch path, so AEDE still supplies the policy. A parked delivery is re-dispatched as is. A failed delivery gets a new Event (same type, payload and correlation id; causation id = original event id) dispatched to that one subscription, giving a new Delivery with attempt #1. Original rows are never modified.
 - Operator replay is gated by isolation action only (no HTTP under PAUSE/QUARANTINE). `replay_policy.allowed` is false in `AVAILABLE`, which is when the demo script replays.
+
+**[Built]** As designed above; recorded in ADR 0021 (Proposed). A parked delivery counts as dead-lettered once it has been `PENDING` with no attempt for more than 5 s. A repeat replay of the same delivery is refused. A database carried over from earlier sessions holds thousands of old parked deliveries on other endpoints, so the DLQ panel should always query with `endpoint_id`.
 
 ### Division of Work
 - **Person B (Sam)**:
@@ -491,6 +503,8 @@ A **"Multi-Endpoint" tab** in the dashboard comparing:
 - Attempts do not store request headers, so the badge has no data source in Postgres. The simulator keeps a ring buffer of received requests with the verification result at `GET /simulator/deliveries`; the frontend joins on `attempt_id`.
 - The simulator container also needs `RELAY_WEBHOOK_SIGNING_SECRET`.
 
+**[Built]** As corrected above. The simulator answers 401 to a bad signature and records each request as `verified`, `invalid`, `unsigned` or `unverifiable`. Person B made the compose changes.
+
 ### Division of Work
 - **Person B (Sam)**:
   - Create `relay/infrastructure/auth/signing.py` and `relay/infrastructure/auth/__init__.py`.
@@ -566,6 +580,7 @@ deploy/
 - **Person C (Suhan)**: Build `alerts[]` state, toast notification stack, banner, and restore action hook in `App.jsx` and `App.css`.
 - **Person B (Sam)**: Ensure backend `POST /endpoints/{id}/restore` publishes state transition event that clears the alert.
   - **[Audit]** Today it does not. Restore only flips in-memory state: no policy event is published, and the cached QUARANTINE policy keeps being served and re-cached, so delivery is unlikely to resume. Suspected from code reading; the only passing demo run used mocks. Reproduce on the compose stack, then fix in `relay/control_plane/aede/service.py` and `relay/data_plane/dispatcher/main.py`: replace the cached policy, save an explainability record, publish a policy evaluation event.
+  - **[Built]** Reproduced: the endpoint re-quarantined within a second of restore and stayed there. Fixed in `AEDEService.restore_and_publish` (ADR 0020, Proposed), which also resets the ERI window and ignores attempts that started before the restore. The live restore now differs from the benchmark's restore model, which keeps the window; the benchmark path is unchanged.
 
 ### Files
 - `relay/dashboard/frontend/src/App.jsx` — alert toast & banner components (Person C)
@@ -582,6 +597,8 @@ deploy/
 1. Formalize `DeliveryAdapter` protocol in `relay/kernel/interfaces/delivery_adapter.py` (**[Audit]** new file; it does not exist yet). No `httpx` types in the kernel.
 2. Extract HTTP dispatch from `WebhookWorker._post()` into `relay/adapters/webhook/adapter.py`.
 3. Inject `DeliveryAdapter` into `WebhookWorker` constructor.
+
+**[Built]** Done. The worker still accepts `client=` and `timeout_seconds=` for older callers and passes them to the default webhook adapter.
 
 ### Division of Work
 - **Person B (Sam)**:
