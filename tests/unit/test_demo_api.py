@@ -15,7 +15,10 @@ class FakeEndpointRepository:
         self.endpoints: list[Endpoint] = []
 
     async def save(self, endpoint: Endpoint) -> None:
-        self.endpoints.append(endpoint)
+        # Upsert on the id, as the real repository does.
+        self.endpoints = [
+            e for e in self.endpoints if e.endpoint_id != endpoint.endpoint_id
+        ] + [endpoint]
 
     async def get_by_owner_and_target(self, owner_id: str, target_url: str):
         for endpoint in self.endpoints:
@@ -29,7 +32,10 @@ class FakeSubscriptionRepository:
         self.subscriptions: list[Subscription] = []
 
     async def save(self, subscription: Subscription) -> None:
-        self.subscriptions.append(subscription)
+        self.subscriptions = [
+            s for s in self.subscriptions
+            if s.subscription_id != subscription.subscription_id
+        ] + [subscription]
 
     async def list_active_by_event_type(self, event_type: str):
         return [s for s in self.subscriptions if event_type in s.event_types]
@@ -230,7 +236,6 @@ async def test_concurrent_activations_create_one_demo_target(monkeypatch) -> Non
     monkeypatch.setenv("RELAY_ALLOW_PRIVATE_TARGETS", "true")
     monkeypatch.setenv("SIMULATOR_URL", "http://simulator:8080")
     monkeypatch.delenv("DEMO_TARGET_URL", raising=False)
-    monkeypatch.setattr(demo, "_target_lock", asyncio.Lock())
 
     class SlowEndpoints(FakeEndpointRepository):
         async def get_by_owner_and_target(self, owner_id, target_url):
@@ -238,8 +243,14 @@ async def test_concurrent_activations_create_one_demo_target(monkeypatch) -> Non
             await asyncio.sleep(0)  # let the other request run before the insert
             return found
 
+    class SlowSubscriptions(FakeSubscriptionRepository):
+        async def list_active_by_event_type(self, event_type):
+            found = await super().list_active_by_event_type(event_type)
+            await asyncio.sleep(0)
+            return found
+
     endpoints = SlowEndpoints()
-    subscriptions = FakeSubscriptionRepository()
+    subscriptions = SlowSubscriptions()
 
     results = await asyncio.gather(
         *(demo.ensure_demo_target(endpoints, subscriptions) for _ in range(5))
@@ -247,3 +258,21 @@ async def test_concurrent_activations_create_one_demo_target(monkeypatch) -> Non
 
     assert len({endpoint.endpoint_id for endpoint, _ in results}) == 1
     assert len({sub.subscription_id for _, sub in results}) == 1
+    assert len(endpoints.endpoints) == 1
+    assert len(subscriptions.subscriptions) == 1
+
+
+async def test_a_demo_target_created_with_a_random_id_is_reused(monkeypatch) -> None:
+    monkeypatch.setenv("RELAY_ALLOW_PRIVATE_TARGETS", "true")
+    monkeypatch.setenv("SIMULATOR_URL", "http://simulator:8080")
+    monkeypatch.delenv("DEMO_TARGET_URL", raising=False)
+    endpoints = FakeEndpointRepository()
+    subscriptions = FakeSubscriptionRepository()
+    older = Endpoint(target_url=demo._target_url(), owner_id=demo.DEMO_OWNER_ID)
+    await endpoints.save(older)
+
+    endpoint, subscription = await demo.ensure_demo_target(endpoints, subscriptions)
+
+    assert endpoint.endpoint_id == older.endpoint_id
+    assert subscription.endpoint_id == older.endpoint_id
+    assert len(endpoints.endpoints) == 1

@@ -19,6 +19,7 @@ from contextlib import suppress
 import logging
 import os
 from typing import Any, Dict, List, Optional
+import uuid
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -242,7 +243,17 @@ class DemoController:
 
 
 controller = DemoController()
-_target_lock = asyncio.Lock()
+
+# Fixed namespace for the ids of the demo endpoint and subscription.
+_DEMO_NAMESPACE = uuid.UUID("3b0d6a52-8f0e-5a4b-9c57-7e1d2a9c4f10")
+
+
+def demo_endpoint_id(target_url: str) -> str:
+    return str(uuid.uuid5(_DEMO_NAMESPACE, f"endpoint:{DEMO_OWNER_ID}:{target_url}"))
+
+
+def demo_subscription_id(endpoint_id: str) -> str:
+    return str(uuid.uuid5(_DEMO_NAMESPACE, f"subscription:{endpoint_id}:{DEMO_EVENT_TYPE}"))
 
 router = APIRouter(prefix="/demo", tags=["demo"])
 
@@ -267,25 +278,22 @@ async def ensure_demo_target(
     active subscription to the same event type would deliver every demo
     event twice.
 
-    The lookup and the insert run under one lock, so two concurrent
-    requests cannot both find nothing and both create a target. The lock
-    covers this API process only; several API replicas would need a
-    unique constraint on (owner_id, target_url).
+    Also safe under concurrent requests, in one API process or several:
+    new rows get ids derived from the owner, target and event type, and
+    both repositories upsert on the id. Two requests that both find
+    nothing write the same rows instead of two targets. The lookups come
+    first so a target created before the ids were derived keeps being used.
     """
-    async with _target_lock:
-        return await _find_or_create_demo_target(endpoints, subscriptions)
-
-
-async def _find_or_create_demo_target(
-    endpoints: EndpointRepository,
-    subscriptions: SubscriptionRepository,
-) -> tuple[Endpoint, Subscription]:
     target_url = _target_url()
     endpoint = await endpoints.get_by_owner_and_target(DEMO_OWNER_ID, target_url)
     if endpoint is None:
         # Same egress rule as POST /endpoints; the demo is not a way around it.
         check_url(target_url)
-        endpoint = Endpoint(target_url=target_url, owner_id=DEMO_OWNER_ID)
+        endpoint = Endpoint(
+            endpoint_id=demo_endpoint_id(target_url),
+            target_url=target_url,
+            owner_id=DEMO_OWNER_ID,
+        )
         await endpoints.save(endpoint)
 
     for existing in await subscriptions.list_active_by_event_type(DEMO_EVENT_TYPE):
@@ -293,6 +301,7 @@ async def _find_or_create_demo_target(
             return endpoint, existing
 
     subscription = Subscription(
+        subscription_id=demo_subscription_id(endpoint.endpoint_id),
         endpoint_id=endpoint.endpoint_id,
         event_types=[DEMO_EVENT_TYPE],
         status="ACTIVE",
