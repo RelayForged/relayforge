@@ -51,16 +51,6 @@ class StrategyB(DeliveryStrategy):
         eri: ERIScore,
         computed_at: datetime,
     ) -> Tuple[DeliveryPolicy, ExplainabilityRecord]:
-        # Scale max_retries down with success rate (reactive retry reduction without quarantine)
-        if eri.success_rate_score > 0.8:
-            max_retries = 10
-        elif eri.success_rate_score > 0.5:
-            max_retries = 7
-        elif eri.success_rate_score > 0.2:
-            max_retries = 5
-        else:
-            max_retries = 3
-
         # Scale delay inversely with success rate score (floor at 0.1 to prevent div by zero)
         effective_success = max(eri.success_rate_score, 0.1)
         scaled_delay = min(5.0 / effective_success, 300.0)
@@ -76,7 +66,7 @@ class StrategyB(DeliveryStrategy):
             retry_policy=RetryPolicy(
                 initial_delay_seconds=scaled_delay,
                 max_delay_seconds=300.0,
-                max_retries=max_retries,
+                max_retries=10,
                 backoff_strategy=BackoffStrategy.EXPONENTIAL,
                 backoff_multiplier=2.0,
                 jitter_ratio=0.15,
@@ -113,12 +103,12 @@ class StrategyB(DeliveryStrategy):
                 composite_eri=eri.score,
             ),
             thresholds=ThresholdSnapshot(
-                degradation_threshold=75.0,
-                degradation_recovery_threshold=95.0,
-                unstable_threshold=55.0,
-                unstable_recovery_threshold=85.0,
+                degradation_threshold=80.0,
+                degradation_recovery_threshold=90.0,
+                unstable_threshold=60.0,
+                unstable_recovery_threshold=70.0,
                 quarantine_threshold=30.0,
-                recovery_threshold=80.0,
+                recovery_threshold=90.0,
             ),
             reason=f"Strategy B active: initial_delay scaled to {scaled_delay:.1f}s based on success rate {eri.success_rate_score:.2f}.",
             triggered_thresholds=[],

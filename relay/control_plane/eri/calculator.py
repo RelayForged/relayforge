@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional, Sequence
+from typing import Sequence
 from relay.kernel.interfaces.telemetry_protocol import TelemetryProtocol
 from relay.kernel.value_objects.eri import ERIScore
 from relay.kernel.value_objects.eri import ERIWeights
@@ -14,14 +14,7 @@ def compute_eri(
     max_consecutive_failures: int,
     max_queue_depth: int,
     computed_at: datetime,
-    window_duration_seconds: Optional[float] = None,
 ) -> ERIScore:
-    if window_duration_seconds is not None:
-        attempts = [
-            a for a in attempts
-            if (computed_at - a.observed_at).total_seconds() <= window_duration_seconds
-        ]
-
     if not attempts:
         return ERIScore.perfect(window_size=0, computed_at=computed_at)
 

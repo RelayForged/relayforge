@@ -98,18 +98,16 @@ class TestStrategies:
     def test_strategy_b_scaling(self, thresholds):
         strategy = StrategyB()
 
-        # Healthy history -> low initial delay, max retries 10, max_parallel 5
+        # Healthy history -> low initial delay
         eri_healthy = ERIScore.perfect(window_size=10, computed_at=NOW)
         p_healthy, r_healthy = strategy.evaluate("ep-101", EndpointState.AVAILABLE, eri_healthy, NOW)
         assert p_healthy.retry_policy.initial_delay_seconds == 5.0
-        assert p_healthy.retry_policy.max_retries == 10
         assert p_healthy.concurrency_policy.max_parallel == 5
 
-        # Degraded success rate -> higher delay, lower max_retries (3), lower max_parallel (1)
+        # Degraded success rate -> higher delay, lower max_parallel
         eri_bad = ERIScore.zero(window_size=10, computed_at=NOW)
         p_bad, r_bad = strategy.evaluate("ep-101", EndpointState.AVAILABLE, eri_bad, NOW)
         assert p_bad.retry_policy.initial_delay_seconds == 50.0  # 5.0 / 0.1
-        assert p_bad.retry_policy.max_retries == 3
         assert p_bad.concurrency_policy.max_parallel == 1
 
     def test_strategy_c_full_engine(self, thresholds):
