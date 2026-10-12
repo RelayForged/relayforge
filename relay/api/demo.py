@@ -242,6 +242,7 @@ class DemoController:
 
 
 controller = DemoController()
+_target_lock = asyncio.Lock()
 
 router = APIRouter(prefix="/demo", tags=["demo"])
 
@@ -265,7 +266,20 @@ async def ensure_demo_target(
     Idempotent across restarts: Postgres keeps earlier rows, and a second
     active subscription to the same event type would deliver every demo
     event twice.
+
+    The lookup and the insert run under one lock, so two concurrent
+    requests cannot both find nothing and both create a target. The lock
+    covers this API process only; several API replicas would need a
+    unique constraint on (owner_id, target_url).
     """
+    async with _target_lock:
+        return await _find_or_create_demo_target(endpoints, subscriptions)
+
+
+async def _find_or_create_demo_target(
+    endpoints: EndpointRepository,
+    subscriptions: SubscriptionRepository,
+) -> tuple[Endpoint, Subscription]:
     target_url = _target_url()
     endpoint = await endpoints.get_by_owner_and_target(DEMO_OWNER_ID, target_url)
     if endpoint is None:

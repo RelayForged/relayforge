@@ -222,3 +222,28 @@ def test_demo_router_is_mounted_only_when_enabled(monkeypatch) -> None:
 
     mounted = any(getattr(r, "path", "").startswith("/demo") for r in app.routes)
     assert mounted is False, "demo routes are exposed without RELAY_DEMO_ENABLED"
+
+
+async def test_concurrent_activations_create_one_demo_target(monkeypatch) -> None:
+    import asyncio
+
+    monkeypatch.setenv("RELAY_ALLOW_PRIVATE_TARGETS", "true")
+    monkeypatch.setenv("SIMULATOR_URL", "http://simulator:8080")
+    monkeypatch.delenv("DEMO_TARGET_URL", raising=False)
+    monkeypatch.setattr(demo, "_target_lock", asyncio.Lock())
+
+    class SlowEndpoints(FakeEndpointRepository):
+        async def get_by_owner_and_target(self, owner_id, target_url):
+            found = await super().get_by_owner_and_target(owner_id, target_url)
+            await asyncio.sleep(0)  # let the other request run before the insert
+            return found
+
+    endpoints = SlowEndpoints()
+    subscriptions = FakeSubscriptionRepository()
+
+    results = await asyncio.gather(
+        *(demo.ensure_demo_target(endpoints, subscriptions) for _ in range(5))
+    )
+
+    assert len({endpoint.endpoint_id for endpoint, _ in results}) == 1
+    assert len({sub.subscription_id for _, sub in results}) == 1
