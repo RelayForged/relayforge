@@ -114,12 +114,17 @@ build. ADR 0020 and ADR 0021 are Proposed and need Person B's sign-off.
 | Core domain entities (Event, Endpoint, Subscription, Delivery, DeliveryAttempt, DeliveryPolicy, ERIScore, EndpointState, Telemetry, ExplainabilityRecord, PolicyEvaluation) | `relay/kernel/` | ✅ Done |
 | Typed internal event domain model | `relay/kernel/events/` | ❌ Empty stub → **T13** |
 
-### Tests (331/331 passing)
+### Tests (433/433 passing on `feature/demo-backend`)
 | Suite | Count | Status |
 |---|---|---|
-| Unit tests | 280+ | ✅ All passing |
-| Integration tests | 50+ | ✅ All passing (including live Kafka pipeline, e2e demo flow, telemetry loop) |
-| Total | **331** | ✅ Exit code 0 |
+| Unit, data-plane, dashboard and simulator tests | 412 | ✅ All passing |
+| Integration tests (`tests/integration/`) | 21 | ✅ All passing (including live Kafka pipeline, e2e demo flow, telemetry loop) |
+| Total | **433** | ✅ Exit code 0 (2026-10-12, Kafka running) |
+
+**[Built]** Three test modules need a running Kafka broker and hang without one
+(`test_kafka_pipeline.py`, `test_telemetry_loop.py`, `test_benchmark.py::test_validate_against_real_aede`).
+`tests/integration/test_end_to_end_adaptation.py` fails intermittently: it uses an unseeded
+random failure rate.
 
 ### Research Report (complete)
 All 7 chapters of `docs/report/` are written:
