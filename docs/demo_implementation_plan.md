@@ -33,6 +33,7 @@
 | T11 Quarantine alerts | ✅ Restore fixed (ADR 0020) | ❌ Not started |
 | T12 Delivery adapter | ✅ Done | — |
 | T13 Typed events | ❌ Not started (Person A's `base.py` comes first) | — |
+| T14 One endpoint per owner and URL | ❌ Not started (Person A). A single-process lock is in place meanwhile | — |
 
 Still open and unassigned: explainability records and the policy cache are in memory only; the
 frontend WebSocket URL points at port 8000 instead of 8090; nothing in compose serves the React
@@ -159,6 +160,7 @@ Following the project governance defined in `docs/execution-plan.md` §C and the
   - Prometheus metrics registration & Grafana service provisioning (`deploy/prometheus.yml`, `deploy/grafana/`) → **T7**
   - Typed internal event domain models (`relay/kernel/events/`) → **T13**
   - Data plane repository extensions (`delivery_attempt_repository.py`) in collaboration with B → **T5**
+  - Database rule and repository change that stop duplicate endpoints (`relay/infrastructure/persistence/`) → **T14**
 - **Support & Review**:
   - Reviews transport adapter extraction (**T12**) and HMAC signing environment configuration (**T9**).
 
@@ -195,13 +197,14 @@ Following the project governance defined in `docs/execution-plan.md` §C and the
 | Quarantine alert notification toasts | **Tier 2** | **T11** | **Person C (Suhan)** | Person B (Sam) |
 | Delivery Adapter interface stub | **Tier 1** | **T12** | **Person B (Sam)** | Person A |
 | Typed internal event domain models | **Tier 1** | **T13** | **Person A** / **Person B (Sam)** | Both |
+| Duplicate endpoints possible under concurrent creation (found in review) | **Tier 1** | **T14** | **Person A** | Person B (Sam) |
 
 ---
 
 ## Priority Order
 
 ```
-T1 → T2 → T3 → T5 → T4 → T6 → T9 → T7 → T10 → T11 → T8 → T12 → T13
+T1 → T2 → T3 → T5 → T4 → T6 → T9 → T7 → T10 → T11 → T8 → T12 → T13 → T14
 ```
 
 **[Audit]** Person B builds the backend half of T3 (live `/ws` feed) first: T1, T2, T6 and T11 all depend on it.
@@ -284,7 +287,7 @@ A prominent **"Demo Scenarios" control panel** with large labeled buttons. Each 
 **[Built] Bug caught in review: duplicate demo endpoint**
 - What went wrong: clicking a scenario button makes the API check whether the demo endpoint exists and create it if it does not. Two clicks arriving at the same instant could both get the answer "no" and both create one. With two demo endpoints, every demo event is delivered twice.
 - Fix: the API now handles these requests one at a time, so the second request finds the endpoint the first one created.
-- Limit of the fix: it works for one API container, which is what compose runs. Several API containers behind a load balancer each have their own lock and cannot see each other's. That setup needs a database rule allowing only one endpoint per owner and URL, which is a schema migration (Person A). Nothing is needed for the demo; it matters only if the API is scaled to several replicas.
+- Limit of the fix: it works for one API container, which is what compose runs. Several API containers behind a load balancer each have their own lock and cannot see each other's. That setup needs a database rule allowing only one endpoint per owner and URL. Person A owns that fix as **T14**. The demo does not depend on it.
 
 ### Division of Work
 - **Person B (Sam)**:
@@ -681,6 +684,59 @@ relay/kernel/events/
 
 ---
 
+## T14 — One Endpoint per Owner and URL (Bug Found in Review)
+- **Primary Owner**: **Person A** (Migration, repository, API behaviour)
+- **Support**: **Person B (Sam)** (Switches the demo engine to the new repository method, reviews)
+- **Closes**: the duplicate demo endpoint bug described under T2, for any number of API containers.
+
+### The problem in plain terms
+Creating the demo endpoint is "look for it, and create it if it is missing". Two requests arriving
+together can both look, both find nothing, and both create one. Every demo event is then delivered
+twice. Today a lock inside the API process prevents this, but a lock in one container cannot stop a
+second container. Only the database can guarantee there is one row.
+
+`POST /endpoints` has the same gap: nothing stops one owner registering the same URL twice.
+
+### What to build
+1. **Migration**: a unique constraint on `endpoints (owner_id, target_url)`.
+   - Existing databases already contain duplicates from earlier sessions, so the migration must
+     deal with them first or it will fail. Keep the oldest row for each pair and point the
+     duplicates' subscriptions at it, or deactivate the duplicates and make the constraint cover
+     active rows only (a partial unique index on `is_active`). Person A picks one and records why.
+   - Deliveries and attempts that reference a duplicate endpoint are history and must not be
+     rewritten.
+2. **Repository**: `EndpointRepository.get_or_create(owner_id, target_url)`: insert with
+   `ON CONFLICT DO NOTHING`, then read the row back. One statement decides the winner, so two
+   containers cannot both create.
+3. **`POST /endpoints`**: decide what a repeat registration returns (the existing endpoint, or
+   409) and implement it. Today it creates a second row.
+4. **Demo subscription**: the constraint fixes the endpoint, not the subscription. Two containers
+   could still each add a subscription to the one endpoint. Subscriptions hold a list of event
+   types, so a simple unique constraint does not fit. Create the endpoint and its subscription in
+   one transaction that only the winner of the insert runs, or take a Postgres advisory lock for
+   the pair.
+
+### Division of Work
+- **Person A**:
+  - Write the Alembic migration and update `endpoints_table` in `models.py`.
+  - Add `get_or_create()` to `endpoint_repository.py`.
+  - Settle and implement the `POST /endpoints` behaviour for a repeat registration.
+  - Make demo subscription creation safe across containers.
+  - Tests: two concurrent creations yield one endpoint and one subscription; the migration runs
+    on a database that already has duplicates.
+- **Person B (Sam)**:
+  - Switch `ensure_demo_target()` in `relay/api/demo.py` to `get_or_create()` and remove the
+    process lock once the database guarantee is in.
+
+### Files
+- `relay/infrastructure/persistence/migrations/versions/<new>.py` — **NEW** (Person A)
+- `relay/infrastructure/persistence/models.py` — unique constraint (Person A)
+- `relay/infrastructure/persistence/endpoint_repository.py` — `get_or_create()` (Person A)
+- `relay/api/endpoints.py` — repeat-registration behaviour (Person A)
+- `relay/api/demo.py` — use `get_or_create()`, drop the lock (Person B)
+
+---
+
 ## Complete File-by-File Work Summary
 
 | File | Change | Task | Primary Owner |
@@ -716,6 +772,7 @@ relay/kernel/events/
 | `relay/adapters/webhook/adapter.py` | **NEW** (moved HTTP from webhook.py) | T12 | **Person B (Sam)** |
 | `relay/data_plane/dispatcher/main.py` | Inject WebhookDeliveryAdapter; replay handler; restore fix; metrics exporter | T5, T7, T11, T12 | **Person B (Sam)** |
 | `relay/kernel/events/*.py` | **NEW** — 6 typed event model files | T13 | **Person A** & **Person B (Sam)** |
+| `relay/infrastructure/persistence/migrations/versions/<new>.py`, `models.py`, `endpoint_repository.py` | Unique `(owner_id, target_url)` on endpoints; `get_or_create()` | T14 | **Person A** |
 
 ---
 
