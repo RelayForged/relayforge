@@ -7,6 +7,7 @@ from fastapi import FastAPI, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 
+from relay.infrastructure.cors import cors_origins
 from relay.infrastructure.auth.signing import (
     NONCE_HEADER,
     SIGNATURE_HEADER,
@@ -30,13 +31,7 @@ app = FastAPI(title="RelayForge Endpoint Simulator")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        origin.strip()
-        for origin in os.environ.get(
-            "RELAY_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
-        ).split(",")
-        if origin.strip()
-    ],
+    allow_origins=cors_origins(),
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )

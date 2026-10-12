@@ -4,7 +4,6 @@ import asyncio
 from contextlib import asynccontextmanager, suppress
 import json
 import logging
-import os
 from typing import AsyncIterator, Optional
 
 from fastapi import FastAPI, WebSocket
@@ -13,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from relay.api.chart import chart_router
 from relay.api.chart.stores import state_store
 from relay.control_plane.explainability.record import ExplainabilityRecord
+from relay.infrastructure.cors import cors_origins
 from relay.infrastructure.messaging.admin import EVENTS_INTERNAL_POLICY_TOPIC
 from relay.infrastructure.messaging.consumer import KafkaConsumer
 from relay.kernel.entities.policy_evaluation import PolicyEvaluation
@@ -83,18 +83,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         await task
 
 
-def _cors_origins() -> list[str]:
-    """Browser origins allowed to read the Chart Data API (the Vite dev server by default)."""
-    raw = os.environ.get(
-        "RELAY_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
-    )
-    return [origin.strip() for origin in raw.split(",") if origin.strip()]
-
-
 app = FastAPI(title="RelayForge Dashboard", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_cors_origins(),
+    allow_origins=cors_origins(),
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )

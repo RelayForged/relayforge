@@ -5,7 +5,6 @@ Run:
     .venv/bin/uvicorn relay.api.main:app --host 0.0.0.0 --port 8000
 """
 from contextlib import asynccontextmanager
-import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,6 +14,7 @@ from relay.api.endpoints import router as endpoints_router
 from relay.api.events import router as events_router
 from relay.api.middleware import BodySizeLimitMiddleware
 from relay.api.subscriptions import router as subscriptions_router
+from relay.infrastructure.cors import cors_origins
 from relay.infrastructure.messaging.producer import close as close_producer, warmup as warmup_producer
 
 
@@ -40,13 +40,7 @@ app.add_middleware(BodySizeLimitMiddleware)
 # scenarios) from the browser; it never writes through the dashboard backend.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        origin.strip()
-        for origin in os.environ.get(
-            "RELAY_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
-        ).split(",")
-        if origin.strip()
-    ],
+    allow_origins=cors_origins(),
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
