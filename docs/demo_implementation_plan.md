@@ -665,6 +665,9 @@ relay/kernel/events/
 
 ## 📅 Revised Sequencing (Multi-Track Sprint Schedule)
 
+**[Built]** Person B's column is complete except the T7 metrics wiring (Day 5) and the T13 event
+models (Day 6), which wait on Person A. Person A's and Person C's columns have not started.
+
 ```
         PERSON B (Sam)                PERSON C (Suhan)              PERSON A
         [Cross-Domain Engine]         [Dashboard Frontend]          [Infra & Core]
@@ -712,17 +715,22 @@ Day 8:  • Buffer: End-to-end rehearsal, edge-case fixes, and timing optimizati
 
 | Minute | Step | Role Executing | What's visible |
 |---|---|---|---|
-| 0:00 | `docker compose up` → open browser → services panel | **Person A** | All 7 services green (Kafka, PG, Redis, API, Dispatcher, Simulator, Dashboard, Prometheus, Grafana) |
+| 0:00 | `docker compose up` → open browser → services panel | **Person A** | All services green: Kafka, PG, Redis, API, Dispatcher, Simulator, Dashboard today; Prometheus and Grafana once T7 lands |
 | 1:00 | Click **▶ Normal Operation** | **Person C** | ERI=100, AVAILABLE badge, Timeline shows green ✅ rows, Radar full, Signature header visible |
 | 2:00 | Click **⚠ Early Degradation** | **Person C** | ERI line enters yellow band → OBSERVED_DEGRADATION, Policy: "reduced concurrency" |
 | 3:30 | Click **🔴 Instability** | **Person C** | ERI enters orange band → UNSTABLE, backoff delay visible in policy panel, alert toast |
 | 5:00 | Click **💀 Full Outage** | **Person C** | ERI collapses → 🚨 QUARANTINE ALERT toast → Timeline shows no new HTTP rows → DLQ panel fills |
-| 6:30 | Click **🔄 Recovery** | **Person C** | RECOVERING probe → ERI climbs above 90 hysteresis line → AVAILABLE |
+| 6:30 | Click **🔄 Recovery** | **Person C** | RECOVERING probe → ERI back above the recovery threshold (80) → AVAILABLE. This takes about 3 s today |
 | 7:00 | Click **[Replay All]** in DLQ panel | **Person B** | Events requeue, Timeline shows replayed deliveries succeeding |
 | 7:30 | Switch to Grafana tab | **Person A** | Real-time ERI gauge, retry histogram, state transition markers |
 | 8:00 | Switch to Benchmark tab | **Person B** | Click "Run Scenario 10 — all strategies" → grouped bar chart renders: C cuts wasted retries (428 vs 930 for A and 626 for B); success rate is equal across strategies |
 | 9:00 | Switch to Multi-Endpoint tab | **Person B** | Show throughput bars: the healthy neighbor is starved under Strategy A (1.39 events/s) and protected under Strategy C (16.58 events/s) |
 | 9:30 | Show State Journal panel | **Person C** | Full journey scrollable: AVAILABLE → DEGRADED → UNSTABLE → QUARANTINED → RECOVERING → AVAILABLE |
+
+**[Built]** Notes for rehearsal:
+- UNSTABLE appears at 3:30 from the Instability preset. Full Outage on its own skips it.
+- The 7:30 Grafana step depends on T7, which is not started.
+- No frontend work for these steps exists yet; every step from 1:00 on depends on Person C's UI.
 
 ---
 
