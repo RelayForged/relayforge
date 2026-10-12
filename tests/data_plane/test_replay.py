@@ -456,3 +456,16 @@ async def test_invalid_replay_payload_is_committed_and_skipped(
 
     assert worker.calls == []
     assert consumer.committed == [3]
+
+
+async def test_named_deliveries_are_not_truncated_by_the_default_limit() -> None:
+    events = [make_event("OrderCreated") for _ in range(60)]
+    items = [dead_letter(e, reason="FAILED") for e in events]
+    manager, published, _ = manager_for(items, events)
+    ids = [i.delivery.delivery_id for i in items]
+
+    result = await manager.replay_dead_letters(now=NOW, delivery_ids=ids)
+
+    assert result.requested == 60
+    assert result.skipped == []
+    assert len(published) == 60
