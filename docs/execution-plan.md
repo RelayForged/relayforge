@@ -6,46 +6,46 @@
 
 ## A. Scope Assessment
 
-### What is achievable in 12 weeks (Target Scope)
+### What is achievable in 12 weeks (MVP)
 
 | Component | Notes |
 |---|---|
-| Docker Compose environment | Kafka, PostgreSQL, Redis, Prometheus, Grafana |
+| Docker Compose environment | Kafka, PostgreSQL, Redis — local dev only |
 | Core domain model | Event, Endpoint, Subscription, Delivery, DeliveryAttempt, DeliveryPolicy — Python dataclasses/Pydantic |
 | FastAPI event ingestion API | `POST /events`, endpoint registration, subscription management |
-| Python SDK | `publish_event()`, `register_endpoint()`, `replay_dead_letters()` — wrapper around the REST API |
-| Kafka backbone | Producer (ingestion) + consumer (dispatcher) + DLQ topic (`events.deadletter`) |
+| Python SDK | `publish_event()`, `register_endpoint()` — thin wrapper around the REST API |
+| Kafka backbone | Producer (ingestion) + consumer (dispatcher) |
 | Webhook delivery worker | Stateless. Executes policy. Collects telemetry. Makes no decisions. |
-| ERI computation & Weight Optimization | Weighted composite score; **weights optimized by trial and error** across 10 failure scenarios |
+| ERI computation | Weighted composite score, configurable weights, sliding window |
 | Endpoint State Machine | All 5 states, hysteresis, non-adjacent transitions |
 | Policy Synthesizer | Produces immutable DeliveryPolicy objects from state + ERI |
 | Explainability records | Stored to PostgreSQL, readable from dashboard |
-| Retry Manager & DLQ Router | Schedules retries. Routes exhausted deliveries to Dead Letter Queue (DLQ). |
-| Replay Manager | Replays dead-lettered events creating fresh DeliveryAttempts; never mutates history |
-| PostgreSQL repositories | All primary entities persisted (including Explainability and DLQ) |
-| Redis policy cache | Last-known-good policy per endpoint with TTL |
+| Retry Manager | Schedules retries. Intervals come from policy only. |
+| PostgreSQL repositories | All primary entities persisted |
+| Redis policy cache | Last-known-good policy per endpoint |
 | Three-tier policy fallback | AEDE → Redis cache → static fallback (Strategy A defaults) |
-| Endpoint Simulator | Controllable mock webhook receiver. Configurable failure rate, latency, error type. |
-| Live Dashboard & Visualizations | React frontend + FastAPI WebSocket backend. Dynamic ERI bands, delivery timeline, policy decisions, explainability radar, DLQ replay controls. |
-| Benchmark framework | Strategy A vs B vs C. Automated runner across 10 failure scenarios with comparison charts. |
-| Prometheus & Grafana | `/metrics` instrumentation, Prometheus scraper, provisioned Grafana dashboards. |
-| Kubernetes Manifests | Production K8s manifests (`deploy/k8s/`), HPA scaling on Kafka lag, multi-stage Dockerfiles. |
+| Endpoint Simulator | Controllable mock webhook receiver. Configurable failure rate, latency, error type via dashboard. |
+| Live Dashboard | React frontend + FastAPI WebSocket backend. Endpoint state, ERI chart, delivery timeline, policy decisions, explainability panel, fault injection controls. |
+| Benchmark framework | Strategy A vs B vs C. Run via dashboard or CLI. Produces comparison charts. |
 | Feature flags | Switch delivery strategy without redeployment |
 
 ### What gets deferred (post-MVP)
 
-The following remain deferred to focus on core platform delivery and research validation:
+These are not cut because they are unimportant. They are cut because the MVP is already ambitious and any one of these could consume weeks without advancing the research contribution.
 
 | Deferred Item | Why |
 |---|---|
-| Terraform | Kubernetes manifests and Docker Compose cover deployment needs |
-| CLI tool | Dashboard + Python SDK cover demo and developer needs |
+| Kubernetes deployment | Docker Compose is sufficient for a demo environment |
+| Terraform | No cloud infra to provision |
+| CLI tool | Dashboard covers demo needs; SDK covers developer use |
 | Multi-language SDKs (Java, Node, Go) | Python SDK demonstrates the concept |
-| External Notification Service (email/Slack) | Dashboard alert panel and Prometheus alertmanager cover MVP |
+| Notification Service (email/Slack) | Dashboard alerts replace this for MVP |
+| Replay Manager | Stub with a basic version; full replay not needed for the demo |
 | Full Subscription versioning | CREATED/ACTIVE/PAUSED is sufficient |
 | Event Registry (schema validation) | Validates little in a demo context |
+| Grafana/Prometheus | Dashboard has its own built-in charts |
 | Multi-tenant / RBAC | Single-tenant demo is sufficient |
-| OpenTelemetry distributed tracing | Structured JSON logs + Prometheus metrics + Dashboard observability is sufficient |
+| OpenTelemetry tracing | Structured logs + dashboard observability is sufficient |
 
 ---
 
@@ -154,20 +154,12 @@ Goal: quantitative comparison that proves the research claim.
   - Scenario 8: rate limiting (HTTP 429 responses)
   - Scenario 9: network partition (endpoint unreachable, connection timeout)
   - Scenario 10: slow degradation (success rate decreases linearly from 100% to 0% over 5 minutes — best shows AEDE advantage)
-- [ ] **Two-Stage AEDE Weight Optimization Methodology**:
-  - **Stage 1 (Rapid In-Process Synthetic Calibration)**:
-    - *Why synthetic data works & is scientifically necessary*: Guarantees strictly identical failure/latency sequences across Strategy A, B, and C (eliminating live network jitter confounders), enables safe fault injection (100% 500 bursts, TCP resets, partitions), and evaluates dozens of candidate weight configurations in seconds in-process.
-    - Sweeps the 7 sub-metric weights ($W_s, W_l, W_f, W_t, W_{5xx}, W_q, W_r$) across Scenarios 1–10 to eliminate configurations that cause state flapping or delayed quarantine, converging on the optimal parameter set.
-  - **Stage 2 (Live End-to-End Real Pipeline Validation)**:
-    - Deploys the tuned weights to the live Docker Compose environment.
-    - Streams real HTTP events via the Python SDK through FastAPI → Kafka → Dispatcher → Webhook Worker (`httpx` making real socket calls) → Endpoint Simulator.
-    - Verifies that real network socket timeouts, real HTTP status codes, and measured round-trip latencies trigger identical, stable adaptation on real live sockets.
 - [ ] Results stored to PostgreSQL
 - [ ] Benchmark chart in dashboard: Strategy A vs B vs C on same axes (retry count, recovery time, delivery success rate)
 - [ ] Redis three-tier fallback: demonstrable by stopping the AEDE process mid-run
 - [ ] Dashboard UX pass: consistent layout, readable charts, clear state labels
 
-**Deliverable**: benchmark run produces comparison charts. All three strategies visible on same graph. AEDE advantage is obvious on Scenario 10. Tuned weights validated on both synthetic scenarios and live HTTP pipeline.
+**Deliverable**: benchmark run produces comparison charts. All three strategies visible on same graph. AEDE advantage is obvious on Scenario 10.
 
 ---
 
@@ -187,15 +179,15 @@ The report writes largely from existing docs — do not start from scratch.
 | Research Hypothesis | `docs/research.md` §Research Hypothesis |
 | Experimental Methodology | `docs/research.md` §Experimental Methodology |
 | Evaluation Results | Benchmark charts from Week 9–10 runs + statistical summary |
-| Discussion | Why AEDE outperforms A and B; empirical trial-and-error optimization of ERI weights across failure scenarios; threats to validity |
+| Discussion | Why AEDE outperforms A and B; weight framing (disclosed not optimized); threats to validity |
 | Conclusion | Contributions summary; future work (time-based windows, ML extensions, Kubernetes) |
 
-Each person drafts the chapters closest to their vertical (A: system design sections; B: AEDE + simulator + evaluation; C: dashboard frontend description). All three review before submission.
+Each person drafts the chapters closest to their vertical (A: system design sections; B: AEDE + evaluation; C: dashboard + simulator description). All three review before submission.
 
 - [ ] Introduction and Problem Statement drafted
 - [ ] System Design chapter drafted (architecture diagrams from docs)
 - [ ] Evaluation chapter drafted with actual benchmark results
-- [ ] Discussion explicitly details the empirical trial-and-error optimization methodology of ERI weights across the 10 failure scenarios and why the architectural framework supports deterministic tuning
+- [ ] Discussion explicitly states: ERI weights are disclosed design parameters, not optimized — the contribution is the framework architecture, not the weights
 - [ ] Threats to validity section included (see `docs/research.md`)
 
 **Week 12 — Integration, demo rehearsal, buffer**
@@ -214,78 +206,40 @@ Each person drafts the chapters closest to their vertical (A: system design sect
 
 Each person owns their vertical. All three own Docker Compose config, integration testing, and demo prep.
 
-### Person A — Backend / Platform Core & Infrastructure
+### Person A — Backend / Platform Core
 
 - Domain model (Event, Endpoint, Subscription, Delivery, DeliveryAttempt)
-- FastAPI ingestion API (`POST /events`, `/endpoints`, `/subscriptions`)
+- FastAPI ingestion API
 - Kafka producer and Dispatcher
 - Webhook delivery worker
-- Retry Manager (executing retries derived from `DeliveryPolicy`)
-- **Dead Letter Queue (DLQ)**:
-  - Kafka DLQ topic (`events.deadletter`)
-  - Automatic dead-letter routing upon retry exhaustion or terminal non-retryable errors
-  - Persistence of `DEAD_LETTER` delivery state in PostgreSQL
-- **Replay Manager**: Data plane consumer that executes replays from DLQ without mutating event history
-- **Kubernetes Production Infrastructure**:
-  - Production multi-stage Dockerfiles (`deploy/docker/`)
-  - Complete Kubernetes manifests (`deploy/k8s/`): Deployments, StatefulSets, Services, ConfigMaps, Secrets, Ingress
-  - Horizontal Pod Autoscaler (HPA) scaling based on CPU and Kafka consumer lag
-- **Prometheus Metrics Registration**:
-  - Expose `/metrics` on Ingestion API and Workers (throughput, latency histograms, error counts)
-- PostgreSQL repositories for all entities (Events, Deliveries, Attempts, Telemetry, DLQ)
-- Three-tier policy fallback data-plane wiring + Redis TTL
+- Retry Manager (all three strategies via `DeliveryStrategy` interface)
+- PostgreSQL repositories
+- Three-tier policy fallback wiring + Redis TTL
 
-### Person B — AEDE / Research Core (Sam)
+### Person B — AEDE / Research Core
 
-- ERI computation + sliding attempt-count window
-- **Endpoint Simulator (Backend & Fault Injection Engine)**:
-  - Standalone FastAPI mock webhook receiver (`relay/tests/test_simulator.py` / standalone service)
-  - Supports all 6 distinct failure modes: `http_error` (500/502/503), `timeout`, `slow` (delay), `rate_limit` (429), `connection_reset`, `auth_failure` (401/403)
-  - Configurable failure rate and delay profiles via `POST /simulator/config`
-- **Empirical Optimization of AEDE Weights (Trial and Error)**:
-  - **AEDE weights must be optimized by trial and error** across the 10 failure scenarios using a two-stage hybrid methodology:
-    - **Stage 1 (Rapid In-Process Synthetic Calibration)**:
-      - Uses deterministic synthetic telemetry generation across Scenarios 1–10 to evaluate dozens of weight candidate combinations in seconds.
-      - *Why synthetic data works & is scientifically required*: Guarantees strictly identical failure sequences across Strategy A, B, and C (eliminating live network jitter confounders), enables safe execution of severe faults (100% 500 bursts, TCP resets, 4.5s partitions), and rapidly filters out weight combinations causing state flapping or delayed quarantine.
-      - Iteratively tunes the 7 sub-metric weights ($W_{success}, W_{latency}, W_{fail}, W_{timeout}, W_{5xx}, W_{queue}, W_{recovery}$) to achieve optimal degradation detection and hysteresis stability.
-    - **Stage 2 (Live End-to-End Real Pipeline Validation)**:
-      - Deploys the calibrated weights to the live Docker Compose environment.
-      - Streams real HTTP events via the Python SDK through FastAPI → Kafka → Dispatcher → Webhook Worker (`httpx` making real TCP/HTTP requests) → Endpoint Simulator.
-      - Verifies that real measured network latencies and actual HTTP response codes produce the identical adaptive transitions observed in Stage 1.
-- **Simulation & Adaptive Validation Loop**:
-  - **Simulate a webhook registration** pointing to the Endpoint Simulator (via Python SDK or REST API).
-  - **Simulate failure** using the Endpoint Simulator (timeouts, 5xx bursts, connection drops, slow responses).
-  - **Show that the system adapts**:
-    - Real-time ERI drop
-    - State transitions: `AVAILABLE` → `OBSERVED_DEGRADATION` → `UNSTABLE` → `QUARANTINED`
-    - Dynamic policy adjustment: concurrency throttling, exponential backoff with jitter, delivery suspension during quarantine
-    - Smooth recovery probing during `RECOVERING` with hysteresis protection
-- Dispatcher ↔ AEDE Three-Tier Policy Fallback integration (`PolicyFallbackManager`: AEDE → Redis Cache → Static Strategy A)
+- ERI computation + configurable weights (attempt-count window only)
 - Endpoint State Machine (all 5 states, hysteresis, non-adjacent transitions)
-- Policy Synthesizer → immutable `DeliveryPolicy` objects
-- Replay Policy synthesis (AEDE determines replay rate limits, batch sizes, and isolation)
-- Explainability records (generation + PostgreSQL persistence)
+- Policy Synthesizer → immutable DeliveryPolicy objects
+- Explainability records (generation + persistence)
 - Feature flag switching (Strategy A / B / C)
-- Chart Data API (reads benchmark and ERI results, formats for dashboard)
-- Python SDK (`RelayClient`, `publish_event()`, `register_endpoint()`, `replay_dead_letters()`)
-- Benchmark runner + 10 failure scenarios
-- **Grafana Research Dashboards**:
-  - Provisioned dashboards comparing Strategy A vs B vs C performance, retry amplification factor, and network/compute waste ratio
+- Chart data API (reads benchmark results from PostgreSQL, formats for dashboard)
+- Overall architecture decisions and cross-cutting concerns
+- Python SDK: `publish_event()`, `register_endpoint()` — thin REST wrapper around A's ingestion API
+- **Benchmark runner + scenario definitions** — B understands the research scenarios, ERI sub-metric triggers, and what each experiment needs to prove. Reassigned from A to rebalance workload and keep the full research evaluation pipeline (run benchmarks → store results → format for dashboard) under one owner.
+- Benchmark result storage (writes to PostgreSQL)
 
-### Person C — Dashboard Frontend & Visualizations (Suhan)
+> **Week 5 checkpoint (end of Week 5, not Week 6)**: All three team members review B's progress together. If ERI computation, the state machine, and the Policy Synthesizer are not functioning by this point, A or C pairs with B immediately on the two most mechanical remaining pieces — explainability record persistence and feature flag wiring — freeing B to focus on any policy logic that isn't yet correct. This checkpoint exists so a slip is caught with a full week of buffer remaining, not discovered at the Week 6 deadline.
 
-- **React Dashboard Frontend (Strictly Frontend Work)**:
-  - Complete UI component hierarchy, layout, and modern CSS styling (`relay/dashboard/frontend/`)
-  - Real-time UI state management and WebSocket client connection to backend stream
-- **Advanced Dashboard Visualizations**:
-  - **Dynamic ERI Trajectory Chart**: Real-time ERI curve overlaid on color-coded background bands corresponding to the 5 states (`AVAILABLE`, `OBSERVED_DEGRADATION`, `UNSTABLE`, `QUARANTINED`, `RECOVERING`) and the hysteresis recovery line.
-  - **Benchmark Comparative Visualizer**: Multi-series charts comparing Strategy A vs B vs C across all 10 failure scenarios (retry count, recovery latency, delivery success rate).
-  - **Explainability Radar / Sub-metric Breakdown**: Visual component breaking down the 7 sub-metric scores and weight contributions explaining why decisions occurred.
-  - **DLQ & Replay Dashboard Panel**: Interactive table of dead-lettered events with one-click replay trigger.
-- **Fault Injection UI Controls**:
-  - Sliders for failure rate, latency inputs, and error mode dropdowns wired to call Person B's Simulator Config API (`POST /simulator/config`)
-- **Grafana Integration**:
-  - Embedding / linking Grafana dashboards within the dashboard interface for operators
+> **Policy API contract**: B locks down the request/response shape between AEDE and the Dispatcher at the start of Week 5 — before the implementation is finished. A and C code against this contract independently. The contract is the boundary; the implementation can follow.
+
+### Person C — Dashboard + Simulator
+
+- Endpoint Simulator (FastAPI, all four failure modes: http_error, timeout, slow, rate_limit)
+- Dashboard backend (FastAPI WebSocket)
+- Dashboard frontend (React): all panels, charts, fault injection controls
+- Benchmark visualization (comparison charts)
+- Fault injection UI wiring
 
 ---
 
@@ -293,100 +247,109 @@ Each person owns their vertical. All three own Docker Compose config, integratio
 
 The demo runs under 10 minutes live. All interactions happen in the browser (no terminal commands during the demo, except optionally showing the SDK script in a terminal).
 
-**Setup (before demo starts)**: Docker Compose up (Kafka, PostgreSQL, Redis, Prometheus, Grafana, AEDE, Simulator), all services healthy, event publishing script ready.
+**Setup (before demo starts)**: Docker Compose up, all services healthy, one registered endpoint pointing at the Endpoint Simulator, event publishing script ready but not running.
 
 ---
 
-**Step 1 — Platform overview & Webhook Simulation (1 min)**
+**Step 1 — Platform overview (1 min)**
 
 Open the dashboard. Show:
-- All services green (Kafka, PostgreSQL, Redis, Prometheus, Grafana, AEDE, Simulator)
-- **Simulate Webhook Registration**: Register a target webhook endpoint pointing at the Endpoint Simulator (`http://simulator:8080/webhook`) via the UI or SDK script.
-- Endpoint initializes in `AVAILABLE` state with `ERI = 100`.
+- All services green (Kafka, PostgreSQL, Redis, AEDE, Simulator)
+- The registered endpoint (URL pointing at Simulator, state: AVAILABLE, ERI: 100)
+- No events yet
 
 ---
 
 **Step 2 — Normal operation (1 min)**
 
-Start event publishing via Python SDK (`client.publish_event(...)` — sends 1 event/second).
+Start the event publishing script (`python publish_events.py` — sends 1 event/second).
 
 Show in dashboard:
 - Events appearing in the delivery timeline
 - ERI holding at ~100
-- State: `AVAILABLE`
+- State: AVAILABLE
 - Policy panel: "Immediate delivery, no backoff, max concurrency"
 - Explainability record: "Success rate 100%, ERI 100 — AVAILABLE policy applied"
 
 ---
 
-**Step 3 — Simulate Failure: Early degradation & Adaptation (1.5 min)**
+**Step 3 — Early degradation (1.5 min)**
 
-On the dashboard, configure the Simulator to inject failure: drag failure rate slider to 60% with mixed timeouts.
+On the dashboard, drag the failure rate slider to 60%.
 
-**Show that the system adapts in real time**:
+Show in real time:
 - Delivery attempts starting to fail (red entries in timeline)
-- ERI beginning to drop on the dynamic line chart
-- As failure count mounts, state transitions to `OBSERVED_DEGRADATION`
+- ERI beginning to drop (line chart falling)
+- After enough failures, state transitions to OBSERVED_DEGRADATION
 - Explainability record appears: "Success rate fell to ~40%, ERI = 72, transitioning to OBSERVED_DEGRADATION — monitoring frequency increased, parallel delivery reduced"
-- Policy panel updates: reduced concurrency, moderate backoff with jitter
+- Policy panel updates: reduced concurrency, moderate backoff
 
 ---
 
 **Step 4 — Full instability (1.5 min)**
 
-Increase Simulator failure rate to 85% with 500/503 errors.
+Increase failure rate to 85%.
 
-Show system adaptation:
+Show in real time:
 - ERI drops below unstable threshold
-- State transitions to `UNSTABLE`
+- State transitions to UNSTABLE
 - Explainability record: "ERI = 45, consecutive failures threshold crossed — aggressive backoff applied, parallel delivery suspended, admin alert issued"
 - Policy panel: long retry intervals, queue depth increasing, alert badge visible
 
 ---
 
-**Step 5 — Quarantine & Dead-Letter Queue (DLQ) Routing (1.5 min)**
+**Step 5 — Quarantine (1 min)**
 
 Increase failure rate to 100%.
 
 Show:
-- ERI collapses (< 30)
-- State transitions to `QUARANTINED`
-- Delivery halts — no new HTTP delivery attempts hit the external target
-- Events are still published via the SDK and accumulate durably in Kafka without loss
-- Exhausted retry attempts transition to `DEAD_LETTER` and route to the DLQ topic (`events.deadletter`)
-- Dead-lettered events appear in the dashboard's DLQ panel
+- ERI collapses
+- State transitions to QUARANTINED (non-adjacent transition from UNSTABLE bypassing intermediate states if applicable)
+- Delivery halts — no new delivery attempts in timeline
+- Policy: "Delivery suspended — all events preserved in queue"
+- Events are still being published (SDK still running) — they accumulate, none are lost
 
 ---
 
-**Step 6 — Recovery & Replay from DLQ (1.5 min)**
+**Step 6 — Recovery (1.5 min)**
 
-Restore Simulator failure rate to 0% on the dashboard.
+Restore failure rate to 0% on the dashboard.
 
 Show:
-- State transitions to `RECOVERING` as probe delivery succeeds
-- Gradual traffic restoration — delivery attempts appear slowly under single-stream concurrency
-- ERI climbs back up above recovery threshold (90) due to hysteresis
-- State returns to `AVAILABLE`
-- **Replay from DLQ**: Trigger replay of dead-lettered events via the dashboard DLQ panel (or SDK `client.replay_dead_letters()`)
-- Replay creates fresh `DeliveryAttempt` records, delivering the queued events safely
+- State transitions to RECOVERING (first probe succeeds)
+- Gradual traffic restoration — delivery attempts appear slowly
+- ERI climbing back up
+- Explainability record: "Consecutive successes threshold met — entering RECOVERING, gradual replay beginning"
+- After sustained success: state returns to AVAILABLE
+- Backlog of queued events begins delivering
 
 ---
 
-**Step 7 — Prometheus & Grafana Live Metrics (1 min)**
-
-Switch to Grafana:
-- Show real-time platform metrics: ERI gauge, state transition distribution, delivery latency p95/p99, throughput, and DLQ arrival rate.
-
----
-
-**Step 8 — Benchmark comparison & Optimized Weights (1 min)**
+**Step 7 — Benchmark comparison (1.5 min)**
 
 Switch to the Benchmark tab.
 
-Show comparison of Strategy A vs B vs C on Scenario 10 (slow degradation) using the **empirically optimized AEDE weights**:
+Show a pre-run or live-run comparison of Strategy A vs B vs C on Scenario 10 (slow degradation):
+- X-axis: time
+- Y-axis: retry count and/or successful delivery rate
 - Strategy A (static): keeps retrying at fixed intervals, burns retries during outage, slow recovery
-- Strategy B (adaptive backoff): reduces retry frequency but lacks state awareness and quarantine
-- Strategy C (AEDE with optimized weights): detects degradation early, quarantines during outage, recovers efficiently — fewest wasted retries, fastest stable recovery
+- Strategy B (adaptive backoff): reduces retry frequency but no state awareness, no quarantine
+- Strategy C (AEDE): detects degradation early, quarantines during outage, recovers efficiently — fewest wasted retries, fastest stable recovery
+
+The chart makes the research claim visually obvious.
+
+---
+
+**Step 8 — Explainability panel (0.5 min)**
+
+Click any policy decision entry in the delivery timeline.
+
+Show the full explainability record:
+- Metric values at decision time (success rate, ERI score, consecutive failures, latency)
+- Which thresholds were crossed
+- Which state transition occurred
+- Which policy fields changed and why
+- Timestamp and policy ID
 
 "Every decision is fully auditable. No black box."
 
@@ -399,31 +362,33 @@ The project is "done enough" when all of the following are true:
 - [ ] Events can be published via the Python SDK and reach Kafka
 - [ ] Webhook delivery works with retry (at minimum Strategy A baseline)
 - [ ] AEDE is computing ERI, running the state machine, and synthesizing policies
-- [ ] **AEDE weights are empirically optimized by trial and error** across the 10 failure scenarios to prove sensitive detection and hysteresis stability
-- [ ] Webhook registration and failure simulation demonstrate clear, automated system adaptation
-- [ ] Dead Letter Queue (DLQ) captures exhausted deliveries, and Replay from DLQ works without mutating history
-- [ ] Prometheus metrics are exposed on `/metrics` and provisioned in Grafana dashboards
-- [ ] Kubernetes production deployment manifests are complete and validated
 - [ ] Explainability records are stored and displayable in the dashboard
 - [ ] Endpoint Simulator is controllable from the dashboard (failure rate, latency, error type)
-- [ ] Dashboard shows live ERI chart with threshold bands, endpoint state, delivery timeline, policy decisions, explainability panel, and DLQ controls
+- [ ] Dashboard shows live ERI chart, endpoint state, delivery timeline, policy decisions, and explainability panel
 - [ ] Benchmark comparison (Strategy A vs B vs C) runs and produces charts
 - [ ] Demo script runs end-to-end in under 10 minutes
 - [ ] Three-tier policy fallback works (demoed by stopping the AEDE process — delivery continues via Redis cache, then static defaults)
+- [ ] Report explicitly states ERI weights are disclosed design parameters, not optimized — the research contribution is the AEDE framework and its comparison against A/B baselines, not the weight values
+
+Everything else is post-MVP. If all checklist items are met with time remaining, pick one deferred item. Otherwise: the project is done.
 
 ---
 
 ## F. What Not to Build
 
-If an AI agent or team member proposes any of the following, it should be blocked until all target checklist items are complete:
+If an AI agent or team member proposes any of the following, it should be blocked until all MVP checklist items are complete. These are not missing features — they are explicitly deferred scope.
 
 | Do Not Build | Alternative |
 |---|---|
-| Terraform HCL provisioning | Kubernetes manifests and Docker Compose cover deployment needs |
-| CLI tool | Python SDK + Dashboard covers developer and demo needs |
+| Terraform or Kubernetes manifests | Docker Compose only |
+| Grafana or Prometheus integration | Dashboard has built-in charts |
+| Email or Slack notifications | Dashboard alert panel only |
+| CLI tool | Python SDK + dashboard covers demo needs |
 | Java, Node, or Go SDKs | Python SDK only |
-| External email/Slack notification infrastructure | Dashboard alerts + Prometheus Alertmanager cover operational alerting |
-| Multi-tenant support or organizational RBAC | Single-tenant demo environment is sufficient |
-| OpenTelemetry distributed tracing | Structured JSON logs + Prometheus metrics + Dashboard observability is sufficient |
+| Multi-tenant support or organizational RBAC | Single-tenant, no auth beyond basic API keys |
+| OpenTelemetry tracing | Structured JSON logs + dashboard observability |
+| Subscription versioning beyond CREATED/ACTIVE/PAUSED | Not needed for demo |
+| Full Replay Manager | Stub with basic version; full replay is post-MVP |
 | Event Registry with formal schema validation | Type field on Event entity is sufficient |
 
+If an agent starts generating Kubernetes YAML, Terraform HCL, Dockerfile.prod multi-stage builds for cloud deployment, or Grafana dashboard JSON — stop it. Those outputs are waste at this stage.
