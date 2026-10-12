@@ -8,6 +8,35 @@
 > **Revision (2026-10-12)**: status tables and task specs corrected after a code audit of
 > `feature/research-contribution`. Corrections are marked **[Audit]**. Person B's detailed
 > build plan, API contracts and open decisions are in `docs/sam_implementation_plan.md`.
+>
+> **Revision 2 (2026-10-12)**: Person B's backend work is built on `feature/demo-backend` and
+> verified on the compose stack. Status changes are marked **[Built]**. The task sections below
+> keep their original wording as the specification; where the build differs, a **[Built]** note
+> says how.
+
+---
+
+## Task Status
+
+| Task | Backend (Person B / A) | Frontend (Person C) |
+|---|---|---|
+| T1 ERI chart bands | ✅ `thresholds`, `state` and `sub_scores` are in the live payload | ❌ Not started |
+| T2 Scenario presets | ✅ 8 presets, simulator modes, auto-publisher | ❌ Not started |
+| T3 Radar chart | ✅ `/ws` streams live AEDE data | ❌ Not started |
+| T4 Benchmark tab | ✅ `POST /api/chart/benchmark/run` with computed `comparison` | ❌ Not started |
+| T5 Replay + DLQ | ✅ ReplayManager, `POST /replay`, `GET /api/chart/dlq`, SDK (ADR 0021) | ❌ Not started |
+| T6 State journal | ✅ `reason` and `triggered_thresholds` are in the payload | ❌ Not started |
+| T7 Prometheus + Grafana | ❌ Not started (Person A's metrics module comes first) | — |
+| T8 Multi-endpoint | ✅ `GET /api/chart/benchmark/multi-endpoint` | ❌ Not started |
+| T9 HMAC surface | ✅ Signing on in compose; simulator verifies and records | ❌ Not started |
+| T10 Kubernetes | ❌ Not started (Person A) | — |
+| T11 Quarantine alerts | ✅ Restore fixed (ADR 0020) | ❌ Not started |
+| T12 Delivery adapter | ✅ Done | — |
+| T13 Typed events | ❌ Not started (Person A's `base.py` comes first) | — |
+
+Still open and unassigned: explainability records and the policy cache are in memory only; the
+frontend WebSocket URL points at port 8000 instead of 8090; nothing in compose serves the React
+build. ADR 0020 and ADR 0021 are Proposed and need Person B's sign-off.
 
 ---
 
@@ -44,10 +73,10 @@
 | Kafka producer (event ingestion → `events.business` topic) | `relay/infrastructure/messaging/producer.py` | ✅ Done |
 | Kafka consumer / Dispatcher (reads business + retry topics, requests policy, assigns work) | `relay/data_plane/dispatcher/main.py` | ✅ Done |
 | Stateless Webhook Worker (HTTP POST, telemetry collection, AEDE feedback) | `relay/data_plane/workers/webhook.py` | ✅ Done |
-| HMAC-SHA256 payload signing — code exists, activated by `hmac_required` in policy | `relay/data_plane/workers/webhook.py` | ✅ Done (not wired in docker-compose yet → T9) |
+| HMAC-SHA256 payload signing — code exists, activated by `hmac_required` in policy | `relay/data_plane/workers/webhook.py` | ✅ Done. **[Built]** Helpers moved to `relay/infrastructure/auth/signing.py`; signing is on in docker-compose (T9) |
 | SSRF guard (blocks private IP targets in production) | `relay/infrastructure/url_guard.py` | ✅ Done |
 | Retry Manager (schedules future attempts from policy intervals) | `relay/data_plane/retry_manager/manager.py` | ✅ Done |
-| Dead Letter Queue routing | dispatcher + retry manager | ⚠️ **[Audit]** Exhausted deliveries are marked `FAILED`; `DEAD_LETTER` is only set for a missing/inactive endpoint; deliveries skipped under PAUSE/QUARANTINE stay `PENDING` and are never re-dispatched → **T5** |
+| Dead Letter Queue routing | dispatcher + retry manager | ⚠️ **[Audit]** Exhausted deliveries are marked `FAILED`; `DEAD_LETTER` is only set for a missing/inactive endpoint; deliveries skipped under PAUSE/QUARANTINE stay `PENDING` and are never re-dispatched → **T5**. **[Built]** Statuses are unchanged; the DLQ view covers all three cases and replay re-dispatches them (ADR 0021) |
 | Three-tier policy fallback (AEDE live → Redis cache → Strategy A static defaults) | `relay/infrastructure/cache.py` + dispatcher | ✅ Done |
 | Policy cache with TTL | `relay/infrastructure/cache.py` | ⚠️ **[Audit]** In-memory implementation only; the dispatcher runs on `InMemoryPolicyCache`. No Redis-backed class exists. Unassigned gap |
 | Feature flags (`AEDE_ENABLED`, `ERI_ENABLED`, `STATE_MACHINE_ENABLED`, `STATIC_RETRY_MODE`, `ADAPTIVE_RETRY_MODE`) | `relay/infrastructure/feature_flags.py` | ✅ Done |
@@ -59,29 +88,29 @@
 |---|---|---|
 | Docker Compose stack (Kafka, PostgreSQL, Redis, API, Dispatcher, Simulator, Dashboard) | `docker-compose.yml` | ✅ Done |
 | Multi-stage Dockerfile | `Dockerfile` | ✅ Done |
-| Endpoint Simulator | `simulator/` | ⚠️ **[Audit]** 4 modes exist (http_error, timeout, slow, rate_limit). `success`, `mixed`, `auth_failure`, `connection_reset` are missing → **T2** |
+| Endpoint Simulator | `simulator/` | ⚠️ **[Audit]** 4 modes exist (http_error, timeout, slow, rate_limit). `success`, `mixed`, `auth_failure`, `connection_reset` are missing → **T2**. **[Built]** All 8 modes exist |
 | Prometheus & Grafana | — | ❌ Not in docker-compose → **T7** |
 | Kubernetes manifests | — | ❌ `deploy/k8s/` does not exist → **T10** |
 
 ### Dashboard (partially complete)
 | Component | Location | Status |
 |---|---|---|
-| WebSocket backend streaming state updates | `relay/dashboard/websocket.py` | ⚠️ **[Audit]** Stream is synthetic (`DashboardDemoSource`), not fed by the real pipeline; `delivery_events` is always empty → **T3** |
-| Chart Data API (endpoints, ERI history, policy, explainability, benchmark results) | `relay/api/chart/router.py` | ✅ Done, except **[Audit]** benchmark results are always empty: the runner writes to a different store than the router reads → **T4** |
-| React frontend — endpoint state badge, ERI line chart, delivery timeline, policy panel, explainability panel, fault injection controls | `relay/dashboard/frontend/src/App.jsx` | ✅ Basic done. **[Audit]** WebSocket URL points at port 8000 (API); the dashboard is on 8090. No CORS on any backend. Nothing in compose serves the React build |
-| ERI chart threshold bands + hysteresis lines | — | ❌ → **T1** |
-| Scenario preset buttons | — | ❌ → **T2** |
-| Sub-metric radar chart | — | ❌ → **T3** |
-| Strategy A/B/C benchmark comparison tab | — | ❌ → **T4** |
-| DLQ panel + replay button | — | ❌ → **T5** |
-| State transition journal | — | ❌ → **T6** |
-| Quarantine alert toasts | — | ❌ → **T11** |
+| WebSocket backend streaming state updates | `relay/dashboard/websocket.py` | ⚠️ **[Audit]** Stream is synthetic (`DashboardDemoSource`), not fed by the real pipeline; `delivery_events` is always empty → **T3**. **[Built]** `/ws` reads the live `state_store` and Postgres; the synthetic source runs only with `DASHBOARD_SYNTHETIC_SOURCE=true` |
+| Chart Data API (endpoints, ERI history, policy, explainability, benchmark results) | `relay/api/chart/router.py` | ✅ Done, except **[Audit]** benchmark results are always empty: the runner writes to a different store than the router reads → **T4**. **[Built]** Stores bridged; DLQ, benchmark-run and multi-endpoint routes added |
+| React frontend — endpoint state badge, ERI line chart, delivery timeline, policy panel, explainability panel, fault injection controls | `relay/dashboard/frontend/src/App.jsx` | ✅ Basic done. **[Audit]** WebSocket URL points at port 8000 (API); the dashboard is on 8090. Nothing in compose serves the React build. **[Built]** CORS is now on the API, dashboard and simulator (`RELAY_CORS_ORIGINS`); the port and the missing frontend service are still open |
+| ERI chart threshold bands + hysteresis lines | — | ❌ UI → **T1** (data ready) |
+| Scenario preset buttons | — | ❌ UI → **T2** (API ready) |
+| Sub-metric radar chart | — | ❌ UI → **T3** (data ready) |
+| Strategy A/B/C benchmark comparison tab | — | ❌ UI → **T4** (API ready) |
+| DLQ panel + replay button | — | ❌ UI → **T5** (API ready) |
+| State transition journal | — | ❌ UI → **T6** (data ready) |
+| Quarantine alert toasts | — | ❌ UI → **T11** (restore fixed) |
 
 ### SDK & Domain Model (complete)
 | Component | Location | Status |
 |---|---|---|
 | Python SDK (`publish_event`, `register_endpoint`, `create_subscription`, `get_event`) | `relay/sdk/client.py` | ✅ Done |
-| `replay_dead_letters()` SDK method | — | ❌ → **T5** |
+| `replay_dead_letters()` SDK method | `relay/sdk/client.py` | ✅ **[Built]** (T5) |
 | Core domain entities (Event, Endpoint, Subscription, Delivery, DeliveryAttempt, DeliveryPolicy, ERIScore, EndpointState, Telemetry, ExplainabilityRecord, PolicyEvaluation) | `relay/kernel/` | ✅ Done |
 | Typed internal event domain model | `relay/kernel/events/` | ❌ Empty stub → **T13** |
 
