@@ -91,11 +91,18 @@ class ReplayManager:
         """
         Request replay of up to `limit` dead letters, oldest first.
 
+        `limit` pages an open-ended request. When the caller names the
+        deliveries, every named one is considered: truncating the list
+        would report valid dead letters as skipped.
+
         Safe to call twice for the same delivery: the replay Event's id is
         derived from the source delivery id, so a repeat produces the same
         Event and the Dispatcher's idempotent writes absorb it.
         """
         replay_id = str(uuid4())
+        if delivery_ids is not None:
+            delivery_ids = list(dict.fromkeys(delivery_ids))[:MAX_REPLAY_LIMIT]
+            limit = len(delivery_ids)
         candidates = await self._deliveries.get_dead_letters(
             now=now,
             endpoint_id=endpoint_id,
