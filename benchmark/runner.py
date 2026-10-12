@@ -41,17 +41,11 @@ class SyntheticTelemetryGenerator:
         count: int,
         endpoint_id: str,
         start_time: datetime,
-        bursty: bool = False,
     ) -> List[Telemetry]:
         """Generate a block of synthetic Telemetry records matching the phase specification."""
         items: List[Telemetry] = []
-        obs_time = start_time
         for i in range(count):
-            if bursty:
-                interval_ms = max(1.0, self._rng.expovariate(1.0 / 50.0))
-                obs_time = obs_time + timedelta(milliseconds=interval_ms)
-            else:
-                obs_time = start_time + timedelta(milliseconds=i * 50)
+            obs_time = start_time + timedelta(milliseconds=i * 50)
             roll = self._rng.random()
 
             if roll < phase.success_rate:
@@ -92,21 +86,8 @@ class SyntheticTelemetryGenerator:
 @dataclass(frozen=True)
 class DeliveryStrategyConfig:
     """Configures the delivery strategy and feature flags for an experiment run."""
-    strategy: str  # "STRATEGY_A", "STRATEGY_B", "STRATEGY_C", "STRATEGY_HCB"
+    strategy: str  # "STRATEGY_A", "STRATEGY_B", "STRATEGY_C"
     feature_flags: Optional[Dict[str, bool]] = None
-
-
-# Hystrix-style circuit breaker defaults (verified against the official Netflix Hystrix
-# configuration wiki, github.com/Netflix/Hystrix/wiki/configuration):
-#   circuitBreaker.requestVolumeThreshold = 20
-#   circuitBreaker.errorThresholdPercentage = 50
-#   circuitBreaker.sleepWindowInMilliseconds = 5000
-# This benchmark harness advances simulated wall-clock time by exactly 1 second per event
-# (see the `current_time += timedelta(seconds=1)` line in BenchmarkRunner.run), so the
-# 5000ms sleep window is translated directly and losslessly into 5 simulated events.
-HCB_ROLLING_WINDOW = 20
-HCB_ERROR_THRESHOLD = 0.5
-HCB_SLEEP_WINDOW_EVENTS = 5
 
 
 class BenchmarkRunner:
@@ -119,37 +100,28 @@ class BenchmarkRunner:
         sm_thresholds: Optional[StateMachineThresholds] = None,
         window_size: int = 100,
         random_seed: int = 42,
-        bursty: bool = False,
     ) -> None:
         self.strategy_config = strategy_config
-        self.eri_weights = eri_weights or ERIWeights.optimal()
-        if sm_thresholds is not None:
-            self.sm_thresholds = sm_thresholds
-        elif self.strategy_config.strategy == "STRATEGY_C_DOUBLE_PRIME":
-            # Ablation C'' (no hysteresis): near-zero epsilon hysteresis gap (0.001)
-            self.sm_thresholds = StateMachineThresholds(
-                degradation_threshold=80.0,
-                degradation_recovery_threshold=80.001,
-                unstable_threshold=60.0,
-                unstable_recovery_threshold=60.001,
-                quarantine_threshold=30.0,
-                recovery_threshold=30.001,
-            )
-        else:
-            # Matches the production default in relay/control_plane/aede/service.py: wider
-            # hysteresis gaps than the original 80/90, 60/75, verified to cut flapping on
-            # long-duration moderate-degradation scenarios without regressing outage detection.
-            self.sm_thresholds = StateMachineThresholds(
-                degradation_threshold=75.0,
-                degradation_recovery_threshold=95.0,
-                unstable_threshold=55.0,
-                unstable_recovery_threshold=85.0,
-                quarantine_threshold=30.0,
-                recovery_threshold=80.0,
-            )
+        self.eri_weights = eri_weights or ERIWeights(
+            success_rate_weight=0.35,
+            latency_weight=0.20,
+            consecutive_failures_weight=0.20,
+            timeout_weight=0.10,
+            http_5xx_weight=0.05,
+            queue_depth_weight=0.05,
+            recovery_trend_weight=0.05,
+        )
+        self.sm_thresholds = sm_thresholds or StateMachineThresholds(
+            degradation_threshold=80.0,
+            degradation_recovery_threshold=90.0,
+            unstable_threshold=60.0,
+            unstable_recovery_threshold=75.0,
+            quarantine_threshold=30.0,
+            recovery_threshold=90.0,
+        )
         self.window_size = window_size
         self.random_seed = random_seed
-        self.bursty = bursty
+        self.generator = SyntheticTelemetryGenerator(seed=random_seed)
         self.strategy_a = StrategyA()
         self.strategy_b = StrategyB()
 
@@ -160,16 +132,6 @@ class BenchmarkRunner:
         start_time: Optional[datetime] = None,
     ) -> BenchmarkResult:
         """Run an entire scenario through the configured strategy and produce a BenchmarkResult."""
-        # Re-seed per (base seed, scenario_id) rather than reusing one generator across every
-        # scenario a runner instance happens to process. A single stateful RNG shared across
-        # scenarios makes each scenario's telemetry depend on which OTHER scenarios ran before
-        # it and in what order within that particular script -- so the same nominal seed and
-        # scenario produced different telemetry in run_experiments.py (which iterates all 14
-        # scenarios) versus ablation.py (which iterates only the 8 held-out scenarios). Deriving
-        # the seed from (random_seed, scenario_id) makes a given scenario's telemetry depend only
-        # on the base seed and that scenario, never on run order or which sibling scenarios are
-        # present in the same batch.
-        self.generator = SyntheticTelemetryGenerator(seed=self.random_seed * 10_000 + scenario.scenario_id)
         current_time = start_time or datetime.now(timezone.utc)
         result = BenchmarkResult(
             scenario_id=scenario.scenario_id,
@@ -179,33 +141,17 @@ class BenchmarkRunner:
         )
 
         current_state = EndpointState.AVAILABLE
-        is_hcb = self.strategy_config.strategy == "STRATEGY_HCB"
-        result.state_transitions = ["CB_CLOSED"] if is_hcb else [current_state.value]
+        result.state_transitions = [current_state.value]
 
         sliding_window: List[Telemetry] = []
         failure_streak = 0
 
-        # Independent Hystrix-style circuit breaker bookkeeping (STRATEGY_HCB only; unused,
-        # harmless no-ops for every other strategy). Deliberately does not touch AEDE's ERI or
-        # state machine at all -- this models what an off-the-shelf circuit breaker library
-        # would do with no knowledge of AEDE's design.
-        cb_state = "CB_CLOSED"
-        cb_window: List[bool] = []
-        cb_open_remaining = 0
-
         for phase in scenario.phases:
-            # Simulate manual admin restoration if the endpoint was quarantined
-            # and this phase represents post-fault recovery (e.g. operator verified health and clicked Restore)
-            if self.strategy_config.strategy.startswith("STRATEGY_C") and phase.manual_restore and current_state == EndpointState.QUARANTINED:
-                current_state = EndpointState.RECOVERING
-                result.state_transitions.append(current_state.value)
-
             telemetry_batch = self.generator.generate(
                 phase=phase,
                 count=phase.duration_events,
                 endpoint_id=endpoint_id,
                 start_time=current_time,
-                bursty=self.bursty,
             )
 
             for item in telemetry_batch:
@@ -227,14 +173,14 @@ class BenchmarkRunner:
                 )
 
                 # 2. Evaluate State Transition
-                if self.strategy_config.strategy.startswith("STRATEGY_C"):
+                if self.strategy_config.strategy == "STRATEGY_C":
                     new_state = next_state(
                         current=current_state,
                         eri=eri,
                         thresholds=self.sm_thresholds,
                     )
                 else:
-                    # Strategy A, B, O do not have a standard state machine progression
+                    # Strategy A & B do not have an endpoint state model
                     new_state = EndpointState.AVAILABLE
 
                 if new_state != current_state:
@@ -251,8 +197,6 @@ class BenchmarkRunner:
                         computed_at=current_time,
                     )
                     retries = 0 if item.succeeded else policy.retry_policy.max_retries
-                    delay_sec = policy.retry_policy.initial_delay_seconds if not item.succeeded else 0.0
-                    concurrency = policy.concurrency_policy.max_parallel
                 elif self.strategy_config.strategy == "STRATEGY_B":
                     # Adaptive retry baseline without state model
                     policy, _ = self.strategy_b.evaluate(
@@ -262,64 +206,8 @@ class BenchmarkRunner:
                         computed_at=current_time,
                     )
                     retries = 0 if item.succeeded else policy.retry_policy.max_retries
-                    delay_sec = policy.retry_policy.initial_delay_seconds if not item.succeeded else 0.0
-                    concurrency = policy.concurrency_policy.max_parallel
-                elif self.strategy_config.strategy == "STRATEGY_O":
-                    # Strategy O: Oracle upper bound with ground truth phase knowledge
-                    if phase.success_rate == 0.0 or item.succeeded:
-                        retries = 0
-                    else:
-                        retries = 1
-                    delay_sec = 0.0
-                    concurrency = 10
-                elif self.strategy_config.strategy == "STRATEGY_HCB":
-                    # Hystrix-style circuit breaker baseline: an off-the-shelf pattern, not AEDE.
-                    # CLOSED: normal delivery, retry policy mirrors Strategy A's static exponential
-                    # backoff (isolates "does the breaker mechanism help" from "does a smarter
-                    # backoff shape help", the latter already covered by Strategy B).
-                    a_policy, _ = self.strategy_a.evaluate(
-                        endpoint_id=endpoint_id,
-                        endpoint_state=EndpointState.AVAILABLE,
-                        eri=eri,
-                        computed_at=current_time,
-                    )
-                    concurrency = a_policy.concurrency_policy.max_parallel
-
-                    if cb_state == "CB_CLOSED":
-                        retries = 0 if item.succeeded else a_policy.retry_policy.max_retries
-                        delay_sec = 0.0 if item.succeeded else a_policy.retry_policy.initial_delay_seconds
-                        cb_window.append(item.succeeded)
-                        if len(cb_window) > HCB_ROLLING_WINDOW:
-                            cb_window = cb_window[-HCB_ROLLING_WINDOW:]
-                        if len(cb_window) >= HCB_ROLLING_WINDOW:
-                            error_rate = 1.0 - (sum(cb_window) / len(cb_window))
-                            if error_rate >= HCB_ERROR_THRESHOLD:
-                                cb_state = "CB_OPEN"
-                                cb_open_remaining = HCB_SLEEP_WINDOW_EVENTS
-                                cb_window = []
-                                result.state_transitions.append(cb_state)
-                    elif cb_state == "CB_OPEN":
-                        # Fail fast: circuit is tripped, no delivery attempt is made at all.
-                        retries = 0
-                        delay_sec = 0.0
-                        cb_open_remaining -= 1
-                        if cb_open_remaining <= 0:
-                            cb_state = "CB_HALF_OPEN"
-                            result.state_transitions.append(cb_state)
-                    else:  # CB_HALF_OPEN: exactly one probe attempt
-                        if item.succeeded:
-                            retries = 0
-                            delay_sec = 0.0
-                            cb_state = "CB_CLOSED"
-                            cb_window = []
-                        else:
-                            retries = a_policy.retry_policy.max_retries
-                            delay_sec = a_policy.retry_policy.initial_delay_seconds
-                            cb_state = "CB_OPEN"
-                            cb_open_remaining = HCB_SLEEP_WINDOW_EVENTS
-                        result.state_transitions.append(cb_state)
                 else:
-                    # Strategy C (AEDE), C' (no isolation), C'' (no hysteresis)
+                    # Strategy C (AEDE): state-driven policy synthesis
                     policy, _ = synthesize_policy(
                         endpoint_id=endpoint_id,
                         state_before=current_state,
@@ -328,24 +216,13 @@ class BenchmarkRunner:
                         thresholds=self.sm_thresholds,
                         computed_at=current_time,
                     )
-                    if self.strategy_config.strategy == "STRATEGY_C_PRIME":
-                        # Ablation Strategy C' (no isolation): retries executed even while QUARANTINED
-                        if item.succeeded:
-                            retries = 0
-                        elif current_state == EndpointState.QUARANTINED:
-                            retries = 5  # Continues attempting delivery without isolation
-                        else:
-                            retries = policy.retry_policy.max_retries
+                    if current_state == EndpointState.QUARANTINED:
+                        # Full isolation: no delivery attempts / retries wasted
+                        retries = 0
+                    elif item.succeeded:
+                        retries = 0
                     else:
-                        # Standard Strategy C and Strategy C'' (with isolation)
-                        if current_state == EndpointState.QUARANTINED:
-                            retries = 0
-                        elif item.succeeded:
-                            retries = 0
-                        else:
-                            retries = policy.retry_policy.max_retries
-                    delay_sec = policy.retry_policy.initial_delay_seconds if not item.succeeded else 0.0
-                    concurrency = policy.concurrency_policy.max_parallel
+                        retries = policy.retry_policy.max_retries
 
                 # 4. Update failure streak
                 if item.succeeded:
@@ -362,8 +239,6 @@ class BenchmarkRunner:
                         timed_out=item.timed_out,
                         final_state=current_state.value,
                         eri_score=eri.score,
-                        delay_seconds=delay_sec,
-                        max_parallel=concurrency,
                     )
                 )
 
