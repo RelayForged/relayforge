@@ -281,6 +281,11 @@ A prominent **"Demo Scenarios" control panel** with large labeled buttons. Each 
 - `DEMO_TARGET_URL` is optional and defaults to `SIMULATOR_URL` + `/webhook`; compose does not set it.
 - Person B made the compose changes for this task.
 
+**[Built] Bug caught in review: duplicate demo endpoint**
+- What went wrong: clicking a scenario button makes the API check whether the demo endpoint exists and create it if it does not. Two clicks arriving at the same instant could both get the answer "no" and both create one. With two demo endpoints, every demo event is delivered twice.
+- Fix: the API now handles these requests one at a time, so the second request finds the endpoint the first one created.
+- Limit of the fix: it works for one API container, which is what compose runs. Several API containers behind a load balancer each have their own lock and cannot see each other's. That setup needs a database rule allowing only one endpoint per owner and URL, which is a schema migration (Person A). Nothing is needed for the demo; it matters only if the API is scaled to several replicas.
+
 ### Division of Work
 - **Person B (Sam)**:
   - Create `relay/api/demo.py` with `POST /demo/scenario` (configures simulator, launches background event publishing task).
