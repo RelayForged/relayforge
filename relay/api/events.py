@@ -29,18 +29,33 @@ def build_event(event_type: str, payload: dict) -> Event:
     )
 
 
+class EventPublishFailed(Exception):
+    """The event row is committed, but it did not reach Kafka."""
+
+    def __init__(self, event_id: str) -> None:
+        super().__init__(f"event {event_id} persisted but Kafka publish failed")
+        self.event_id = event_id
+
+
 async def persist_and_publish(event: Event, repo: EventRepository) -> None:
     """
     The one ingest path: Postgres first, then Kafka. Shared by the HTTP
     route and the demo auto-publisher so no caller can put an event on
     the log that was never persisted.
+
+    A publish failure is raised as EventPublishFailed so a caller can tell
+    it apart from a failed save: the row exists and the event is not on
+    the log.
     """
     await repo.save(event)
-    await publish(
-        EVENTS_BUSINESS_TOPIC,
-        key=event.event_id,
-        value=event.model_dump_json().encode("utf-8"),
-    )
+    try:
+        await publish(
+            EVENTS_BUSINESS_TOPIC,
+            key=event.event_id,
+            value=event.model_dump_json().encode("utf-8"),
+        )
+    except Exception as exc:
+        raise EventPublishFailed(event.event_id) from exc
 
 
 @router.post(
@@ -55,15 +70,9 @@ async def ingest_event(
 ) -> IngestEventResponse:
     event = build_event(body.event_type, body.payload)
 
-    await repo.save(event)
-
     try:
-        await publish(
-            EVENTS_BUSINESS_TOPIC,
-            key=event.event_id,
-            value=event.model_dump_json().encode("utf-8"),
-        )
-    except Exception as exc:
+        await persist_and_publish(event, repo)
+    except EventPublishFailed as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
