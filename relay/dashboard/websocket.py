@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import asyncio
@@ -35,13 +36,15 @@ def synthetic_source_enabled() -> bool:
     The synthetic source is opt-in only. A dashboard that quietly fell
     back to generated telemetry would present invented data as real.
     """
-    return os.environ.get(SYNTHETIC_SOURCE_ENV, "false").lower() in ("true", "1", "yes")
+    return os.environ.get(SYNTHETIC_SOURCE_ENV, "false").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
 
 
 async def fetch_delivery_events(endpoint_id: str) -> list[dict[str, Any]]:
     """Recent completed attempts for the timeline, newest first. Read-only."""
-    # Imported here so the dashboard still starts, and the synthetic source
-    # still works, where no database is configured.
     from relay.infrastructure.persistence.delivery_attempt_repository import (
         DeliveryAttemptRepository,
     )
@@ -49,7 +52,10 @@ async def fetch_delivery_events(endpoint_id: str) -> list[dict[str, Any]]:
     rows = await DeliveryAttemptRepository().list_recent_by_endpoint(
         endpoint_id, limit=DELIVERY_EVENT_LIMIT
     )
-    return [get_delivery_event(delivery, attempt) for delivery, attempt in rows]
+    return [
+        get_delivery_event(delivery, attempt)
+        for delivery, attempt in rows
+    ]
 
 
 async def _receive_control_messages(
@@ -60,7 +66,6 @@ async def _receive_control_messages(
     Receive dashboard-owned demo control messages.
 
     Supported message:
-
         {
             "type": "demo_control",
             "failure_rate": 0.8,
@@ -68,9 +73,8 @@ async def _receive_control_messages(
             "failure_mode": "mixed"
         }
 
-    All fields except `type` are optional. They only affect the synthetic
-    source; on the live stream (`source` is None) messages are read and
-    dropped, so the receive loop still notices a disconnect.
+    On the live stream, messages are read and dropped so the receive
+    loop still notices a disconnect.
     """
     while True:
         message = await websocket.receive_json()
@@ -106,21 +110,23 @@ async def _receive_control_messages(
                     else None
                 ),
             )
-
         except (TypeError, ValueError):
             # Invalid demo-control messages are ignored.
-            # They must never interrupt the live dashboard stream.
             continue
 
 
-async def _stream_synthetic(websocket: WebSocket, source: DashboardDemoSource) -> None:
+async def _stream_synthetic(
+    websocket: WebSocket,
+    source: DashboardDemoSource,
+) -> None:
     history: list[dict[str, object]] = []
 
     while True:
-        eri, state, policy, explanation = source.next_evaluation()
+        eri, state, policy, explanation, sub_scores = (
+            source.next_evaluation()
+        )
 
         point = create_eri_point(eri)
-
         history.append(point)
         history = history[-30:]
 
@@ -131,11 +137,25 @@ async def _stream_synthetic(websocket: WebSocket, source: DashboardDemoSource) -
             policy=policy,
             explanation=explanation,
         )
+
+        # Include the sub-scores and weights used by the radar chart.
+        message["eri_sub_scores"] = sub_scores
+        message["eri_weights"] = {
+            "success_rate": source.weights.success_rate_weight,
+            "latency": source.weights.latency_weight,
+            "consecutive_failures": (
+                source.weights.consecutive_failures_weight
+            ),
+            "timeout_rate": source.weights.timeout_weight,
+            "http_5xx_rate": source.weights.http_5xx_weight,
+            "queue_depth": source.weights.queue_depth_weight,
+            "recovery_trend": source.weights.recovery_trend_weight,
+        }
+
         message["source"] = "synthetic"
         message["endpoint_id"] = source.endpoint_id
 
         await websocket.send_json(message)
-
         await asyncio.sleep(SYNTHETIC_INTERVAL_SECONDS)
 
 
@@ -145,8 +165,7 @@ async def _stream_live(
     fetch_events: DeliveryEventFetcher,
     interval_seconds: float,
 ) -> None:
-    # The Dispatcher's AEDEService runs on ERIWeights.optimal() unless
-    # explicitly reconfigured; the policy event does not carry the weights.
+    # The policy event does not carry the weights, so use the platform default.
     weights = ERIWeights.optimal()
     events_failed = False
 
@@ -160,10 +179,10 @@ async def _stream_live(
                 events = await fetch_events(current)
                 events_failed = False
             except Exception:
-                # Logged once per outage rather than once per tick.
                 if not events_failed:
                     logger.exception(
-                        "Dashboard delivery-event query failed endpoint_id=%s", current
+                        "Dashboard delivery-event query failed endpoint_id=%s",
+                        current,
                     )
                 events_failed = True
 
@@ -175,7 +194,6 @@ async def _stream_live(
         )
 
         await websocket.send_json(message)
-
         await asyncio.sleep(interval_seconds)
 
 
@@ -186,12 +204,21 @@ async def send_state_update(
     fetch_events: DeliveryEventFetcher = fetch_delivery_events,
     interval_seconds: float = LIVE_INTERVAL_SECONDS,
 ) -> None:
-    source = DashboardDemoSource() if synthetic_source_enabled() else None
+    source = (
+        DashboardDemoSource()
+        if synthetic_source_enabled()
+        else None
+    )
 
     if source is not None:
         stream = _stream_synthetic(websocket, source)
     else:
-        stream = _stream_live(websocket, endpoint_id, fetch_events, interval_seconds)
+        stream = _stream_live(
+            websocket,
+            endpoint_id,
+            fetch_events,
+            interval_seconds,
+        )
 
     receiver_task = asyncio.create_task(
         _receive_control_messages(websocket, source)
@@ -199,20 +226,25 @@ async def send_state_update(
     stream_task = asyncio.create_task(stream)
 
     try:
-        # Whichever side ends first (client disconnect on receive, or a
-        # failed send) ends the connection.
+        # Whichever side ends first ends the connection.
         done, _ = await asyncio.wait(
             {receiver_task, stream_task},
             return_when=asyncio.FIRST_COMPLETED,
         )
+
         for task in done:
             exc = task.exception()
-            if exc is not None and not isinstance(exc, WebSocketDisconnect):
+            if exc is not None and not isinstance(
+                exc, WebSocketDisconnect
+            ):
                 raise exc
 
     finally:
         for task in (receiver_task, stream_task):
             task.cancel()
 
-            with suppress(asyncio.CancelledError, WebSocketDisconnect):
+            with suppress(
+                asyncio.CancelledError,
+                WebSocketDisconnect,
+            ):
                 await task

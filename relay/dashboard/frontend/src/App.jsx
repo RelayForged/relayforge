@@ -3,10 +3,17 @@ import {
   CartesianGrid,
   Line,
   LineChart,
+  ReferenceArea,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
+  Radar,
+  RadarChart,
+  PolarGrid,
+  PolarAngleAxis,
+  PolarRadiusAxis,
 } from "recharts";
 import "./App.css";
 
@@ -28,7 +35,7 @@ const INITIAL_STATE = {
 };
 
 function getWebSocketUrl() {
-  return "ws://127.0.0.1:8000/ws";
+  return "ws://127.0.0.1:8001/ws";
 }
 
 function formatTime(timestamp) {
@@ -67,6 +74,28 @@ function getStateClass(state) {
   }
 }
 
+function getStateColor(state) {
+  switch (state) {
+    case "AVAILABLE":
+      return "#22c55e";
+
+    case "OBSERVED_DEGRADATION":
+      return "#eab308";
+
+    case "UNSTABLE":
+      return "#f97316";
+
+    case "QUARANTINED":
+      return "#ef4444";
+
+    case "RECOVERING":
+      return "#3b82f6";
+
+    default:
+      return "#64748b";
+  }
+}
+
 function App() {
   const [dashboardState, setDashboardState] = useState(INITIAL_STATE);
   const [connectionStatus, setConnectionStatus] =
@@ -76,6 +105,30 @@ function App() {
 const [failureRate, setFailureRate] = useState(80);
 const [latencyMs, setLatencyMs] = useState(150);
 const [failureMode, setFailureMode] = useState("mixed");
+
+const scenarioPresets = [
+  {
+    id: "healthy",
+    label: "Healthy",
+    failureRate: 0,
+    latencyMs: 150,
+    failureMode: "mixed",
+  },
+  {
+    id: "degraded",
+    label: "Degraded",
+    failureRate: 50,
+    latencyMs: 1000,
+    failureMode: "http_500",
+  },
+  {
+    id: "outage",
+    label: "Outage",
+    failureRate: 100,
+    latencyMs: 5000,
+    failureMode: "timeout",
+  },
+];
 
   useEffect(() => {
     let websocket;
@@ -99,6 +152,7 @@ const [failureMode, setFailureMode] = useState("mixed");
       websocket.onmessage = (event) => {
         try {
           const message = JSON.parse(event.data);
+          console.log("Dashboard payload:", message);
 
           if (message?.type === "state_update") {
             setDashboardState((currentState) => ({
@@ -167,15 +221,144 @@ const [failureMode, setFailureMode] = useState("mixed");
   );
 };
 
+const applyScenarioPreset = (preset) => {
+  setFailureRate(preset.failureRate);
+  setLatencyMs(preset.latencyMs);
+  setFailureMode(preset.failureMode);
+
+  const websocket = websocketRef.current;
+
+  if (
+    !websocket ||
+    websocket.readyState !== WebSocket.OPEN
+  ) {
+    return;
+  }
+
+  websocket.send(
+    JSON.stringify({
+      type: "demo_control",
+      failure_rate: preset.failureRate / 100,
+      latency_ms: preset.latencyMs,
+      failure_mode: preset.failureMode,
+    }),
+  );
+};
+
   const chartData = useMemo(() => {
-    return (dashboardState.eri_history ?? []).map(
-      (point, index) => ({
-        ...point,
-        index: index + 1,
-        label: formatTime(point.timestamp),
-      }),
-    );
-  }, [dashboardState.eri_history]);
+  const history = dashboardState.eri_history ?? [];
+
+  return history.map((point, index) => {
+    const previous = history[index - 1];
+
+    return {
+      ...point,
+      index: index + 1,
+      label: formatTime(point.timestamp),
+
+      stateChanged:
+        index > 0 &&
+        previous?.state != null &&
+        point.state != null &&
+        previous.state !== point.state,
+
+      successRate:
+        Number(point.sub_scores?.success_rate ?? 0) * 100,
+
+      timeoutRate:
+        Number(point.sub_scores?.timeout_rate ?? 0) * 100,
+
+      consecutiveFailures:
+        Number(point.sub_scores?.consecutive_failures ?? 0) * 100,
+    };
+  });
+}, [dashboardState.eri_history]);
+
+const radarData = useMemo(() => {
+  const scores = dashboardState.eri_sub_scores ?? {};
+  const weights = dashboardState.eri_weights ?? {};
+
+  const metrics = [
+    { key: "success_rate", label: "Success Rate" },
+    { key: "latency", label: "Latency" },
+    { key: "consecutive_failures", label: "Consecutive Failures" },
+    { key: "timeout_rate", label: "Timeout Rate" },
+    { key: "http_5xx_rate", label: "HTTP 5xx" },
+    { key: "queue_depth", label: "Queue Depth" },
+    { key: "recovery_trend", label: "Recovery Trend" },
+  ];
+
+  return metrics.map((metric) => ({
+    metric: metric.label,
+    score: Math.max(
+      0,
+      Math.min(1, Number(scores[metric.key] ?? 0)),
+    ),
+    weight: Number(weights[metric.key] ?? 0),
+  }));
+}, [dashboardState.eri_sub_scores, dashboardState.eri_weights]);
+
+const thresholds = dashboardState.thresholds ?? {};
+
+const thresholdBands = useMemo(() => {
+  const quarantine = Number(thresholds.quarantine_threshold);
+  const unstable = Number(thresholds.unstable_threshold);
+  const degradation = Number(thresholds.degradation_threshold);
+  const degradationRecovery = Number(
+    thresholds.degradation_recovery_threshold,
+  );
+
+  const values = [
+    quarantine,
+    unstable,
+    degradation,
+    degradationRecovery,
+  ];
+
+  if (
+    values.some((value) => !Number.isFinite(value)) ||
+    quarantine < 0 ||
+    unstable <= quarantine ||
+    degradation <= unstable ||
+    degradationRecovery <= degradation ||
+    degradationRecovery > 100
+  ) {
+    return [];
+  }
+
+  return [
+    {
+      key: "quarantined",
+      from: 0,
+      to: quarantine,
+      color: "#ef444422",
+    },
+    {
+      key: "unstable",
+      from: quarantine,
+      to: unstable,
+      color: "#f9731622",
+    },
+    {
+      key: "degraded",
+      from: unstable,
+      to: degradation,
+      color: "#eab30822",
+    },
+    {
+      key: "recovering",
+      from: degradation,
+      to: degradationRecovery,
+      color: "#86efac22",
+    },
+    {
+      key: "available",
+      from: degradationRecovery,
+      to: 100,
+      color: "#22c55e22",
+    },
+  ];
+}, [thresholds]);
 
   const stateClass = getStateClass(dashboardState.state);
 
@@ -371,6 +554,24 @@ const [failureMode, setFailureMode] = useState("mixed");
     >
       Apply fault profile
     </button>
+
+<div className="scenario-presets">
+  <p className="fault-label">Scenario presets</p>
+
+  <div className="scenario-preset-buttons">
+    {scenarioPresets.map((preset) => (
+      <button
+        key={preset.id}
+        type="button"
+        className="scenario-preset-button"
+        onClick={() => applyScenarioPreset(preset)}
+        disabled={connectionStatus !== "connected"}
+      >
+        {preset.label}
+      </button>
+    ))}
+  </div>
+</div>
   </div>
 </article>
 
@@ -388,44 +589,237 @@ const [failureMode, setFailureMode] = useState("mixed");
           </div>
 
           <div className="chart-container">
-            {chartData.length === 0 ? (
-              <div className="chart-empty">
-                No ERI history available.
-              </div>
-            ) : (
-              <ResponsiveContainer
-                width="100%"
-                height="100%"
-              >
-                <LineChart data={chartData}>
-                  <CartesianGrid
-                    strokeDasharray="3 3"
-                  />
+  {chartData.length === 0 ? (
+    <div className="chart-empty">
+      No ERI history available.
+    </div>
+  ) : (
+    <ResponsiveContainer width="100%" height="100%">
+      <LineChart
+        data={chartData}
+        margin={{ top: 12, right: 16, bottom: 8, left: 0 }}
+      >
+        <CartesianGrid strokeDasharray="3 3" />
 
-                  <XAxis
-                    dataKey="label"
-                    tick={{ fontSize: 11 }}
-                  />
+        {thresholdBands.map((band) => (
+          <ReferenceArea
+            key={band.key}
+            y1={band.from}
+            y2={band.to}
+            fill={band.color}
+            stroke="none"
+          />
+        ))}
 
-                  <YAxis
-                    domain={[0, 100]}
-                    tick={{ fontSize: 11 }}
-                  />
+        <XAxis
+          dataKey="label"
+          tick={{ fontSize: 11 }}
+          minTickGap={24}
+        />
 
-                  <Tooltip />
+        <YAxis
+          domain={[0, 100]}
+          ticks={[0, 20, 40, 60, 80, 100]}
+          tick={{ fontSize: 11 }}
+        />
 
-                  <Line
-                    type="monotone"
-                    dataKey="value"
-                    stroke="currentColor"
-                    strokeWidth={2}
-                    dot={false}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            )}
+        <Tooltip
+          formatter={(value, name) => [
+            Number(value).toFixed(1),
+            name,
+          ]}
+          labelFormatter={(label) => `Time: ${label}`}
+        />
+
+        {Number.isFinite(Number(thresholds.degradation_threshold)) &&
+          thresholds.degradation_threshold !== undefined && (
+            <ReferenceLine
+              y={Number(thresholds.degradation_threshold)}
+              stroke="#eab308"
+              strokeDasharray="6 4"
+              label={{
+                value: "Degradation",
+                position: "insideTopRight",
+                fontSize: 10,
+              }}
+            />
+          )}
+
+        {Number.isFinite(
+          Number(thresholds.degradation_recovery_threshold),
+        ) &&
+          thresholds.degradation_recovery_threshold !== undefined && (
+            <ReferenceLine
+              y={Number(thresholds.degradation_recovery_threshold)}
+              stroke="#22c55e"
+              strokeDasharray="6 4"
+              label={{
+                value: "Recovery",
+                position: "insideTopRight",
+                fontSize: 10,
+              }}
+            />
+          )}
+
+        <Line
+          type="monotone"
+          dataKey="value"
+          name="ERI"
+          stroke={getStateColor(dashboardState.state)}
+          strokeWidth={2.5}
+          isAnimationActive={false}
+          activeDot={{ r: 5 }}
+          dot={(props) => {
+            const { cx, cy, payload } = props;
+
+            if (!payload?.stateChanged) {
+              return null;
+            }
+
+            return (
+              <circle
+                key={`transition-${payload.index}`}
+                cx={cx}
+                cy={cy}
+                r={4}
+                fill={getStateColor(payload.state)}
+                stroke="#ffffff"
+                strokeWidth={1.5}
+              />
+            );
+          }}
+        />
+      </LineChart>
+    </ResponsiveContainer>
+  )}
+</div>
+
+<div className="eri-chart-legend">
+  <span>
+    <span className="legend-dot" style={{ background: "#22c55e" }} />
+    Available
+  </span>
+  <span>
+    <span className="legend-dot" style={{ background: "#eab308" }} />
+    Degraded
+  </span>
+  <span>
+    <span className="legend-dot" style={{ background: "#f97316" }} />
+    Unstable
+  </span>
+  <span>
+    <span className="legend-dot" style={{ background: "#ef4444" }} />
+    Quarantined
+  </span>
+  <span>
+    <span className="legend-dot" style={{ background: "#3b82f6" }} />
+    Recovering
+  </span>
+</div>
+
+<div className="eri-sparklines">
+  {[
+    {
+      key: "successRate",
+      label: "Success Rate",
+      color: "#22c55e",
+    },
+    {
+      key: "timeoutRate",
+      label: "Timeout Rate",
+      color: "#f97316",
+    },
+    {
+      key: "consecutiveFailures",
+      label: "Consecutive Failures",
+      color: "#ef4444",
+    },
+  ].map((metric) => (
+    <div className="eri-sparkline" key={metric.key}>
+      <div className="sparkline-header">
+        <span>{metric.label}</span>
+        <strong>
+          {chartData.length > 0
+            ? `${chartData[chartData.length - 1][metric.key].toFixed(1)}%`
+            : "--"}
+        </strong>
+      </div>
+
+      <div className="sparkline-chart">
+        {chartData.length === 0 ? (
+          <div className="sparkline-empty">
+            No data
           </div>
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={chartData}>
+              <Line
+                type="monotone"
+                dataKey={metric.key}
+                stroke={metric.color}
+                strokeWidth={2}
+                dot={false}
+                isAnimationActive={false}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+    </div>
+  ))}
+</div>
         </article>
+
+        <article className="dashboard-card radar-card">
+  <div className="card-header">
+    <div>
+      <h2 className="card-title">ERI Sub-Metrics</h2>
+      <p className="card-description">
+        Normalized reliability scores across seven factors
+      </p>
+    </div>
+  </div>
+
+  <div className="radar-chart-container">
+    {dashboardState.eri_sub_scores ? (
+      <ResponsiveContainer width="100%" height="100%">
+        <RadarChart data={radarData} outerRadius="70%">
+          <PolarGrid />
+
+          <PolarAngleAxis
+            dataKey="metric"
+            tick={{ fontSize: 10 }}
+          />
+
+          <PolarRadiusAxis
+            angle={90}
+            domain={[0, 1]}
+            tick={{ fontSize: 9 }}
+          />
+
+          <Radar
+            name="ERI score"
+            dataKey="score"
+            stroke="#3b82f6"
+            fill="#3b82f6"
+            fillOpacity={0.3}
+          />
+
+          <Tooltip
+            formatter={(value) => [
+              `${(Number(value) * 100).toFixed(1)}%`,
+              "Normalized score",
+            ]}
+          />
+        </RadarChart>
+      </ResponsiveContainer>
+    ) : (
+      <div className="chart-empty">
+        Waiting for ERI sub-metric data.
+      </div>
+    )}
+  </div>
+</article>
 
         <article className="dashboard-card timeline-card">
           <div className="card-header">
