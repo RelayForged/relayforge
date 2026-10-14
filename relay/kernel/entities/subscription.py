@@ -14,3 +14,11 @@ class Subscription(BaseModel):
     event_types: List[str]
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     status: str = "ACTIVE"
+    # Empty: every event of `event_types`. Otherwise only events that share
+    # at least one channel, which is how one tenant's events stay away from
+    # another's endpoints (ADR 0025).
+    channels: List[str] = Field(default_factory=list)
+
+    def receives(self, event_channels: List[str]) -> bool:
+        """The channel half of routing; the event type is matched separately."""
+        return not self.channels or bool(set(self.channels) & set(event_channels))

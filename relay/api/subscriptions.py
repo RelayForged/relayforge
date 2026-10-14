@@ -39,6 +39,7 @@ async def create_subscription(
         endpoint_id=body.endpoint_id,
         event_types=body.event_types,
         status="ACTIVE",
+        channels=body.channels,
     )
     try:
         await subscriptions.save(subscription)

@@ -6,6 +6,8 @@ Kafka is never published unless the row is committed. This handler does
 not retry HTTP or Kafka (ADR 0005) -- a failed publish after persist is
 returned as 503; recovery is a later concern.
 """
+from typing import List, Optional
+
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from relay.api.deps import get_event_repository
@@ -19,13 +21,16 @@ from relay.kernel.value_objects.identifiers import CausationID, CorrelationID
 router = APIRouter(tags=["events"])
 
 
-def build_event(event_type: str, payload: dict) -> Event:
+def build_event(
+    event_type: str, payload: dict, channels: Optional[List[str]] = None
+) -> Event:
     correlation_id = CorrelationID()
     return Event(
         correlation_id=correlation_id,
         causation_id=CausationID(value=correlation_id.value),
         event_type=event_type,
         payload=payload,
+        channels=list(channels or []),
     )
 
 
@@ -68,7 +73,7 @@ async def ingest_event(
     _owner_id: str = Depends(require_owner),
     repo: EventRepository = Depends(get_event_repository),
 ) -> IngestEventResponse:
-    event = build_event(body.event_type, body.payload)
+    event = build_event(body.event_type, body.payload, body.channels)
 
     try:
         await persist_and_publish(event, repo)

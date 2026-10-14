@@ -8,7 +8,7 @@ transition made via `subscription.model_copy(update={"status": ...})`.
 """
 from typing import Optional
 
-from sqlalchemy import Row, select
+from sqlalchemy import Row, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -28,6 +28,7 @@ def _to_subscription(row: Row) -> Subscription:
         event_types=list(row.event_types),
         created_at=row.created_at,
         status=row.status,
+        channels=list(row.channels or []),
     )
 
 
@@ -64,12 +65,14 @@ class SubscriptionRepository:
             event_types=subscription.event_types,
             created_at=subscription.created_at,
             status=subscription.status,
+            channels=list(subscription.channels),
         )
         stmt = stmt.on_conflict_do_update(
             index_elements=["subscription_id"],
             set_={
                 "event_types": stmt.excluded.event_types,
                 "status": stmt.excluded.status,
+                "channels": stmt.excluded.channels,
             },
         )
         async with self._engine.begin() as conn:
@@ -87,13 +90,7 @@ class SubscriptionRepository:
         if row is None:
             return None
 
-        return Subscription(
-            subscription_id=row.subscription_id,
-            endpoint_id=row.endpoint_id,
-            event_types=list(row.event_types),
-            created_at=row.created_at,
-            status=row.status,
-        )
+        return _to_subscription(row)
 
     async def list_active_by_event_type(self, event_type: str) -> list[Subscription]:
         """
@@ -113,7 +110,7 @@ class SubscriptionRepository:
         return [_to_subscription(row) for row in rows]
 
     async def list_active_targets_by_event_type(
-        self, event_type: str
+        self, event_type: str, channels: Optional[list[str]] = None
     ) -> list[tuple[Subscription, Endpoint]]:
         """
         ACTIVE subscriptions joined to their *active* Endpoint.
@@ -123,6 +120,10 @@ class SubscriptionRepository:
         used to cost N extra SELECTs, each on its own connection. Filtering
         `is_active` here also stops deliveries to deactivated endpoints,
         which the per-subscription path never checked.
+
+        Channels (ADR 0025): a subscription with none matches every event;
+        one with channels matches only an event sharing at least one.
+        `Subscription.receives` states the same rule in Python.
         """
         stmt = (
             select(
@@ -140,6 +141,12 @@ class SubscriptionRepository:
             .where(subscriptions_table.c.status == "ACTIVE")
             .where(endpoints_table.c.is_active.is_(True))
             .where(subscriptions_table.c.event_types.contains([event_type]))
+            .where(
+                or_(
+                    func.cardinality(subscriptions_table.c.channels) == 0,
+                    subscriptions_table.c.channels.overlap(list(channels or [])),
+                )
+            )
             .order_by(subscriptions_table.c.created_at)
         )
         async with self._engine.connect() as conn:

@@ -33,6 +33,8 @@ events_table = Table(
     Column("event_type", String, nullable=False),
     Column("payload", JSONB, nullable=False),
     Column("occurred_at", TIMESTAMP(timezone=True), nullable=False),
+    # Routing channels (ADR 0025); empty means the event has none.
+    Column("channels", ARRAY(String), nullable=False, server_default="{}"),
 )
 
 # Endpoint and Subscription are configuration entities, not immutable
@@ -65,6 +67,9 @@ subscriptions_table = Table(
     Column("event_types", ARRAY(String), nullable=False),
     Column("created_at", TIMESTAMP(timezone=True), nullable=False),
     Column("status", String, nullable=False, server_default="ACTIVE"),
+    # Empty: every event of the subscribed types. Otherwise only events
+    # sharing at least one channel (ADR 0025).
+    Column("channels", ARRAY(String), nullable=False, server_default="{}"),
     CheckConstraint(
         "status IN ('CREATED', 'ACTIVE', 'PAUSED', 'DISABLED', 'ARCHIVED')",
         name="ck_subscriptions_status",
