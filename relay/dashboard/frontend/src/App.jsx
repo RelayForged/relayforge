@@ -135,6 +135,8 @@ const [multiEndpointError, setMultiEndpointError] = useState("");
 const [alerts, setAlerts] = useState([]);
 const [signatures, setSignatures] = useState({});
 const [faultError, setFaultError] = useState("");
+const [aedeAvailable, setAedeAvailable] = useState(true);
+const [aedeSwitchError, setAedeSwitchError] = useState("");
 const previousStateRef = useRef(INITIAL_STATE.state);
 
 const scenarioPresets = [
@@ -274,6 +276,41 @@ stateAfter: explanation.state_after,
     };
   }, []);
 
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const response = await fetch(`${API_URL}/demo/status`);
+        if (response.ok) {
+          const status = await response.json();
+          setAedeAvailable(status.aede_available ?? true);
+        }
+      } catch {
+        // The switch defaults to "available"; the tier banner shows the truth.
+      }
+    })();
+  }, []);
+
+  const setAedeAvailability = async (available) => {
+    setAedeSwitchError("");
+    try {
+      const response = await fetch(`${API_URL}/demo/aede`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ available }),
+      });
+      if (!response.ok) {
+        throw new Error(`AEDE switch failed (${response.status})`);
+      }
+      setAedeAvailable(available);
+    } catch (error) {
+      setAedeSwitchError(
+        error instanceof Error ? error.message : "AEDE switch failed.",
+      );
+    }
+  };
 
   const applyFaultInjection = () => {
   const selectedMode = FAULT_MODES.find((mode) => mode.value === failureMode);
@@ -850,6 +887,23 @@ const thresholdBands = useMemo(() => {
         </div>
       </header>
 
+      {(dashboardState.policy_tier ?? 1) > 1 && (
+        <section className="fallback-banner" role="status">
+          <div>
+            <strong>
+              {dashboardState.policy_tier === 2
+                ? "⚠ Policy fallback: Tier 2 — cached policy"
+                : "⚠ Policy fallback: Tier 3 — static defaults"}
+            </strong>
+            <span>
+              {dashboardState.policy_tier === 2
+                ? "AEDE is unavailable. The Dispatcher keeps serving the last policy AEDE produced until it expires."
+                : "AEDE is unavailable and the cached policy has expired. Delivery continues on static Strategy A defaults."}
+            </span>
+          </div>
+        </section>
+      )}
+
       {dashboardState.state === "QUARANTINED" && (
         <section className="quarantine-banner" role="alert">
           <div>
@@ -1138,6 +1192,23 @@ const thresholdBands = useMemo(() => {
 </button>
     ))}
   </div>
+
+  {dashboardState.source === "live" && (
+    <div className="aede-switch">
+      <span>
+        Policy engine (AEDE):{" "}
+        <strong>{aedeAvailable ? "available" : "simulated outage"}</strong>
+      </span>
+      <button
+        type="button"
+        className={aedeAvailable ? "aede-switch-stop" : "aede-switch-start"}
+        onClick={() => void setAedeAvailability(!aedeAvailable)}
+      >
+        {aedeAvailable ? "Simulate AEDE outage" : "Bring AEDE back"}
+      </button>
+      {aedeSwitchError && <div className="dlq-error">{aedeSwitchError}</div>}
+    </div>
+  )}
 
   <p className="active-scenario" aria-live="polite">
     Active scenario:{" "}
