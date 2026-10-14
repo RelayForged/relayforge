@@ -660,3 +660,47 @@
   height: 360px;
   min-width: 0;
 }
+
+.scenario-preset-button.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-weight: 700;
+}
+
+.active-scenario {
+  margin: 12px 0 0;
+  color: #64748b;
+  font-size: 14px;
+}
+
+.active-scenario strong {
+  color: #111827;
+}
+
+.dashboard-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.dashboard-tab {
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 9px 18px;
+  background: #ffffff;
+  color: #475569;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.dashboard-tab:hover {
+  background: #f8fafc;
+}
+
+.dashboard-tab.active {
+  background: #1e293b;
+  border-color: #1e293b;
+  color: #ffffff;
+}

@@ -154,6 +154,9 @@ async def _stream_synthetic(
 
         message["source"] = "synthetic"
         message["endpoint_id"] = source.endpoint_id
+        message["thresholds"] = (
+            source.strategy.thresholds.model_dump()
+        )
 
         await websocket.send_json(message)
         await asyncio.sleep(SYNTHETIC_INTERVAL_SECONDS)

@@ -16,6 +16,7 @@ import {
   PolarRadiusAxis,
 } from "recharts";
 import "./App.css";
+import BenchmarkTab from "./BenchmarkTab";
 
 const INITIAL_STATE = {
   type: "state_update",
@@ -105,6 +106,8 @@ function App() {
 const [failureRate, setFailureRate] = useState(80);
 const [latencyMs, setLatencyMs] = useState(150);
 const [failureMode, setFailureMode] = useState("mixed");
+const [activeScenario, setActiveScenario] = useState(null);
+const [activeTab, setActiveTab] = useState("dashboard");
 
 const scenarioPresets = [
   {
@@ -225,6 +228,7 @@ const applyScenarioPreset = (preset) => {
   setFailureRate(preset.failureRate);
   setLatencyMs(preset.latencyMs);
   setFailureMode(preset.failureMode);
+  setActiveScenario(preset.id);
 
   const websocket = websocketRef.current;
 
@@ -391,7 +395,30 @@ const thresholdBands = useMemo(() => {
         </div>
       </header>
 
-      <section className="dashboard-grid">
+      <div className="dashboard-tabs">
+        <button
+          type="button"
+          className={`dashboard-tab ${
+            activeTab === "dashboard" ? "active" : ""
+          }`}
+          onClick={() => setActiveTab("dashboard")}
+        >
+          Dashboard
+        </button>
+
+        <button
+          type="button"
+          className={`dashboard-tab ${
+            activeTab === "benchmark" ? "active" : ""
+          }`}
+          onClick={() => setActiveTab("benchmark")}
+        >
+          Benchmark
+        </button>
+      </div>
+
+      {activeTab === "dashboard" && (
+        <section className="dashboard-grid">
         <article className="dashboard-card state-card">
           <div className="card-header">
             <div>
@@ -563,7 +590,9 @@ const thresholdBands = useMemo(() => {
       <button
         key={preset.id}
         type="button"
-        className="scenario-preset-button"
+        className={`scenario-preset-button ${
+          activeScenario === preset.id ? "active" : ""
+        }`}
         onClick={() => applyScenarioPreset(preset)}
         disabled={connectionStatus !== "connected"}
       >
@@ -571,6 +600,15 @@ const thresholdBands = useMemo(() => {
       </button>
     ))}
   </div>
+
+  <p className="active-scenario" aria-live="polite">
+    Active scenario:{" "}
+    <strong>
+      {scenarioPresets.find(
+        (preset) => preset.id === activeScenario,
+      )?.label ?? "Custom / not selected"}
+    </strong>
+  </p>
 </div>
   </div>
 </article>
@@ -1261,6 +1299,9 @@ const thresholdBands = useMemo(() => {
 </div>
         </article>
       </section>
+      )}
+
+      {activeTab === "benchmark" && <BenchmarkTab />}
     </main>
   );
 }
