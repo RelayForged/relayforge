@@ -50,6 +50,11 @@ function getWebSocketUrl() {
   return DASHBOARD_WS_URL;
 }
 
+function formatEri(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number.toFixed(1) : "--";
+}
+
 function formatTime(timestamp) {
   if (!timestamp) {
     return "--";
@@ -207,8 +212,11 @@ stateAfter: explanation.state_after,
                   id: `${nextState}-${explanation.record_id ?? Date.now()}`,
                   state: nextState,
                   endpointId: message.endpoint_id ?? "Current endpoint",
-                  eri: message.eri ?? "--",
-                  failures: message.sub_scores?.consecutive_failures ?? "--",
+                  eri: formatEri(message.eri),
+                  successRate:
+                    message.eri_sub_scores?.success_rate != null
+                      ? `${(message.eri_sub_scores.success_rate * 100).toFixed(0)}%`
+                      : "--",
                   title: nextState === "QUARANTINED" ? "Endpoint quarantined" : "Endpoint unstable",
                   message: explanation.reason ?? "",
                 };
@@ -727,13 +735,13 @@ const radarData = useMemo(() => {
   const weights = dashboardState.eri_weights ?? {};
 
   const metrics = [
-    { key: "success_rate", label: "Success Rate" },
+    { key: "success_rate", label: "Success" },
     { key: "latency", label: "Latency" },
-    { key: "consecutive_failures", label: "Consecutive Failures" },
-    { key: "timeout_rate", label: "Timeout Rate" },
+    { key: "consecutive_failures", label: "Failure streak" },
+    { key: "timeout_rate", label: "Timeouts" },
     { key: "http_5xx_rate", label: "HTTP 5xx" },
-    { key: "queue_depth", label: "Queue Depth" },
-    { key: "recovery_trend", label: "Recovery Trend" },
+    { key: "queue_depth", label: "Queue depth" },
+    { key: "recovery_trend", label: "Recovery trend" },
   ];
 
   return metrics.map((metric) => ({
@@ -877,8 +885,8 @@ const thresholdBands = useMemo(() => {
                     id: `restore-${Date.now()}`,
                     state: "RESTORE_ERROR",
                     endpointId,
-                    eri: dashboardState.eri,
-                    failures: "--",
+                    eri: formatEri(dashboardState.eri),
+                    successRate: "--",
                     title: "Restore request failed",
                     message: error instanceof Error ? error.message : "Unable to restore endpoint.",
                   },
@@ -898,7 +906,7 @@ const thresholdBands = useMemo(() => {
             <div className={`alert-toast ${alert.state === "QUARANTINED" ? "quarantine" : "unstable"}`} key={alert.id}>
               <div className="alert-toast-title">{alert.title}</div>
               <div>Endpoint {alert.endpointId} {alert.state === "QUARANTINED" ? "has been quarantined." : "is unstable."}</div>
-              <div>ERI: {alert.eri} | Consecutive failures: {alert.failures}</div>
+              <div>ERI: {alert.eri} | Success rate: {alert.successRate}</div>
               {alert.message && <div className="alert-toast-message">{alert.message}</div>}
               <div className="alert-toast-actions">
                 <button
@@ -988,7 +996,7 @@ const thresholdBands = useMemo(() => {
           </div>
 
           <div className="eri-value">
-            {dashboardState.eri}
+            {formatEri(dashboardState.eri)}
             <span className="eri-scale">/ 100</span>
           </div>
 
@@ -1289,17 +1297,17 @@ const thresholdBands = useMemo(() => {
   {[
     {
       key: "successRate",
-      label: "Success Rate",
+      label: "Success score",
       color: "#22c55e",
     },
     {
       key: "timeoutRate",
-      label: "Timeout Rate",
+      label: "Timeout score",
       color: "#f97316",
     },
     {
       key: "consecutiveFailures",
-      label: "Consecutive Failures",
+      label: "Failure-streak score",
       color: "#ef4444",
     },
   ].map((metric) => (
@@ -1343,7 +1351,7 @@ const thresholdBands = useMemo(() => {
     <div>
       <h2 className="card-title">ERI Sub-Metrics</h2>
       <p className="card-description">
-        Normalized reliability scores across seven factors
+        Health score per ERI factor (outer edge = healthy)
       </p>
     </div>
   </div>
@@ -1371,6 +1379,7 @@ const thresholdBands = useMemo(() => {
             stroke="#3b82f6"
             fill="#3b82f6"
             fillOpacity={0.3}
+            isAnimationActive={false}
           />
 
           <Tooltip
