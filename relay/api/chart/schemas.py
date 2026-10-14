@@ -233,3 +233,25 @@ class ScenarioTraceResponse(BaseModel):
     scenario: ScenarioInfo
     seed: int
     strategies: List[StrategyTrace] = Field(default_factory=list)
+
+
+class ContentionTrace(BaseModel):
+    """
+    One strategy's noisy-neighbour run, job by job, for playback.
+
+    Each job is [endpoint, event_index, arrival_ms, start_ms, end_ms, worker,
+    succeeded, retries]; endpoint 0 is the failing one and 1 the healthy
+    one, and worker is -1 for a job that never reached a worker.
+    """
+    strategy: str
+    quarantined_from_event: Optional[int] = None
+    total_sim_time_sec: float
+    jobs: List[List[float]] = Field(default_factory=list)
+
+
+class MultiEndpointTraceResponse(BaseModel):
+    worker_pool_size: int
+    events_per_endpoint: int
+    arrival_interval_ms: float
+    failing_from_event: int
+    strategies: List[ContentionTrace] = Field(default_factory=list)

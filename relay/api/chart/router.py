@@ -24,8 +24,10 @@ from relay.api.chart.schemas import (
     ExplainabilityListResponse,
     ExplainabilityResponse,
     MetricComparison,
+    ContentionTrace,
     MultiEndpointResponse,
     MultiEndpointStrategyResult,
+    MultiEndpointTraceResponse,
     PolicyDecisionResponse,
     ScenarioInfo,
     ScenarioListResponse,
@@ -525,3 +527,49 @@ async def trace_scenario(
     if scenario_id not in {s.scenario_id for s in get_all_scenarios()}:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Unknown scenario {scenario_id}")
     return await asyncio.to_thread(_trace_scenario, scenario_id, seed)
+
+
+@lru_cache(maxsize=1)
+def _multi_endpoint_trace() -> MultiEndpointTraceResponse:
+    from benchmark.multi_endpoint import run_full_multi_endpoint_comparison
+
+    results = run_full_multi_endpoint_comparison()
+    first = next(iter(results.values()))
+    return MultiEndpointTraceResponse(
+        worker_pool_size=first.worker_pool_size,
+        events_per_endpoint=first.healthy_result.total_events,
+        arrival_interval_ms=first.arrival_interval_ms,
+        # The simulation's default outage start for the failing endpoint.
+        failing_from_event=40,
+        strategies=[
+            ContentionTrace(
+                strategy=strategy,
+                quarantined_from_event=result.quarantined_from_event,
+                total_sim_time_sec=result.total_sim_time_sec,
+                jobs=[
+                    [
+                        0 if job.endpoint_id.endswith("failing") else 1,
+                        job.event_idx,
+                        round(job.queue_enter_ms, 1),
+                        round(job.dispatch_start_ms, 1),
+                        round(job.completion_ms, 1),
+                        job.worker,
+                        1 if job.succeeded else 0,
+                        job.retries_scheduled,
+                    ]
+                    for job in result.timeline
+                ],
+            )
+            for strategy, result in results.items()
+        ],
+    )
+
+
+@router.get(
+    "/benchmark/multi-endpoint/trace",
+    response_model=MultiEndpointTraceResponse,
+    summary="The noisy-neighbour simulation job by job, for playback",
+)
+async def get_multi_endpoint_trace() -> MultiEndpointTraceResponse:
+    """Same deterministic run as /benchmark/multi-endpoint, with every job's timing."""
+    return await asyncio.to_thread(_multi_endpoint_trace)

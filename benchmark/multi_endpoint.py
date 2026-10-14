@@ -51,6 +51,8 @@ class ContentionAttempt:
     wait_time_ms: float
     succeeded: bool
     retries_scheduled: int
+    # Which worker ran it; -1 when it never reached one (quarantined).
+    worker: int = -1
 
 
 @dataclass(frozen=True)
@@ -75,6 +77,10 @@ class MultiEndpointRunResult:
     total_sim_time_sec: float
     worker_pool_size: int
     quarantine_triggered: bool
+    # Per-job record, for replaying the run (dashboard). Not used by any metric.
+    timeline: Tuple[ContentionAttempt, ...] = ()
+    quarantined_from_event: Optional[int] = None
+    arrival_interval_ms: float = 0.0
 
 
 def run_contention_simulation(
@@ -120,6 +126,7 @@ def run_contention_simulation(
     ep2_attempts: List[ContentionAttempt] = []
 
     quarantine_triggered = False
+    quarantined_from_event: Optional[int] = None
 
     sim_start_time = datetime(2026, 9, 10, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -151,6 +158,8 @@ def run_contention_simulation(
             ep1_state = new_state
             if ep1_state == EndpointState.QUARANTINED:
                 quarantine_triggered = True
+                if quarantined_from_event is None:
+                    quarantined_from_event = i
                 ep1_retries = 0
             elif ep1_success:
                 ep1_retries = 0
@@ -200,6 +209,7 @@ def run_contention_simulation(
                     wait_time_ms=wait_time,
                     succeeded=ep1_success,
                     retries_scheduled=ep1_retries,
+                    worker=earliest_worker_idx,
                 )
             )
 
@@ -238,6 +248,7 @@ def run_contention_simulation(
                 wait_time_ms=wait_time_2,
                 succeeded=True,
                 retries_scheduled=0,
+                worker=earliest_worker_idx,
             )
         )
 
@@ -276,6 +287,9 @@ def run_contention_simulation(
         total_sim_time_sec=round(total_sim_time, 2),
         worker_pool_size=worker_pool_size,
         quarantine_triggered=quarantine_triggered,
+        timeline=tuple(ep1_attempts + ep2_attempts),
+        quarantined_from_event=quarantined_from_event,
+        arrival_interval_ms=arrival_interval_ms,
     )
 
 
