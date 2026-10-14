@@ -27,7 +27,7 @@ from pydantic import ValidationError
 from relay.adapters.webhook.adapter import WebhookDeliveryAdapter
 from relay.control_plane.aede.service import AEDEService
 from relay.control_plane.aede.strategies import StrategyA, StrategyB, StrategyC
-from relay.data_plane.replay.manager import ReplayWork
+from relay.data_plane.replay.manager import ReplayManager, ReplayWork
 from relay.data_plane.retry_manager.manager import RetryManager, RetryWork
 from relay.data_plane.workers.webhook import WebhookWorker
 from relay.infrastructure.auth.signing import hmac_required_from_env
@@ -148,6 +148,11 @@ class Dispatcher:
         # a publisher is given, announced on the policy topic for the dashboard.
         self._policy_tiers: dict[str, int] = {}
         self._tier_publisher = tier_publisher
+        # Auto-replay (ADR 0027): when AEDE reports an endpoint recovered,
+        # resend what was held for it. Off unless RELAY_AUTO_REPLAY is set.
+        self._auto_replay = os.environ.get("RELAY_AUTO_REPLAY", "false").lower() in ("true", "1", "yes")
+        if self._auto_replay and self._aede_service is not None:
+            self._aede_service.set_recovery_listener(self._replay_after_recovery)
 
         self._worker = worker or WebhookWorker(
             adapter=WebhookDeliveryAdapter(),
@@ -236,6 +241,21 @@ class Dispatcher:
         finally:
             await self._consumer.commit(message)
 
+
+    async def _replay_after_recovery(self, endpoint_id: str, recovered_at: datetime) -> None:
+        """Resend an endpoint's dead letters once AEDE has seen it recover."""
+        try:
+            result = await ReplayManager(deliveries=self._deliveries).replay_dead_letters(
+                now=recovered_at, endpoint_id=endpoint_id, limit=500
+            )
+        except Exception:
+            logger.exception("Automatic replay failed for endpoint=%s", endpoint_id)
+            return
+        logger.warning(
+            "Endpoint %s recovered: automatic replay requested for %s held deliveries",
+            endpoint_id,
+            result.requested,
+        )
 
     def _set_aede_available(self, available: bool) -> None:
         """
@@ -497,7 +517,11 @@ class Dispatcher:
 
         endpoint_state = getattr(endpoint, "state", EndpointState.AVAILABLE)
         if self._aede_service is not None and self._aede_available:
-            endpoint_state = self._aede_service.get_endpoint_state(subscription.endpoint_id)
+            # A quarantine whose hold has expired becomes RECOVERING here,
+            # so this delivery is one of the probes (ADR 0027).
+            endpoint_state = await self._aede_service.check_quarantine_hold(
+                subscription.endpoint_id, computed_at
+            )
         elif isinstance(endpoint_state, str):
             try:
                 endpoint_state = EndpointState(endpoint_state)

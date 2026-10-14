@@ -170,6 +170,12 @@ services:
       AEDE_RECOVERY_MIN_SAMPLES: "25"
       # A cached policy is served as Tier 2 for this long during an AEDE outage (ADR 0024).
       RELAY_POLICY_CACHE_TTL_SECONDS: "30"
+      # Timed quarantine (ADR 0027): probe a quarantined endpoint after 30 s,
+      # doubling after each failed probe up to 4 minutes, and resend its held
+      # events once it recovers. Shorter than the 300 s default so it shows in a demo.
+      AEDE_QUARANTINE_DURATION_SECONDS: "30"
+      AEDE_QUARANTINE_MAX_DURATION_SECONDS: "240"
+      RELAY_AUTO_REPLAY: "true"
       # Dev-only signing secret; the simulator verifies with the same value.
       RELAY_HMAC_REQUIRED: "true"
       RELAY_WEBHOOK_SIGNING_SECRET: ${RELAY_WEBHOOK_SIGNING_SECRET:-relay-dev-signing-secret}

@@ -23,6 +23,7 @@ from relay.control_plane.aede.strategies.adaptive import StrategyB
 from relay.control_plane.aede.strategies.static import StrategyA
 from relay.control_plane.aede.synthesizer import synthesize_policy
 from relay.control_plane.eri.calculator import compute_eri
+from relay.control_plane.state_machine.quarantine import hold_expired, quarantine_hold_seconds
 from relay.control_plane.state_machine.transitions import next_state
 from relay.kernel.value_objects.endpoint_state import EndpointState, StateMachineThresholds
 from relay.kernel.value_objects.eri import ERIWeights
@@ -120,8 +121,15 @@ class BenchmarkRunner:
         window_size: int = 100,
         random_seed: int = 42,
         bursty: bool = False,
+        quarantine_hold_seconds: int = 0,
+        quarantine_hold_max_seconds: int = 3600,
     ) -> None:
         self.strategy_config = strategy_config
+        # Timed quarantine (ADR 0027) for Strategy C. 0, the default, keeps the
+        # published model: only a scenario's manual_restore phase ends a
+        # quarantine. One simulated event is one second.
+        self.quarantine_hold_seconds = quarantine_hold_seconds
+        self.quarantine_hold_max_seconds = quarantine_hold_max_seconds
         self.eri_weights = eri_weights or ERIWeights.optimal()
         if sm_thresholds is not None:
             self.sm_thresholds = sm_thresholds
@@ -184,6 +192,9 @@ class BenchmarkRunner:
 
         sliding_window: List[Telemetry] = []
         failure_streak = 0
+        quarantined_at: Optional[datetime] = None
+        relapses = 0
+        is_c = self.strategy_config.strategy.startswith("STRATEGY_C")
 
         # Independent Hystrix-style circuit breaker bookkeeping (STRATEGY_HCB only; unused,
         # harmless no-ops for every other strategy). Deliberately does not touch AEDE's ERI or
@@ -210,6 +221,17 @@ class BenchmarkRunner:
 
             for item in telemetry_batch:
                 current_time += timedelta(seconds=1)
+
+                # Timed quarantine (ADR 0027): an expired hold is probed.
+                if is_c and current_state == EndpointState.QUARANTINED and hold_expired(
+                    quarantined_at,
+                    current_time,
+                    quarantine_hold_seconds(
+                        self.quarantine_hold_seconds, self.quarantine_hold_max_seconds, relapses
+                    ),
+                ):
+                    current_state = EndpointState.RECOVERING
+                    result.state_transitions.append(current_state.value)
                 sliding_window.append(item)
                 if len(sliding_window) > self.window_size:
                     sliding_window = sliding_window[-self.window_size:]
@@ -238,6 +260,13 @@ class BenchmarkRunner:
                     new_state = EndpointState.AVAILABLE
 
                 if new_state != current_state:
+                    if new_state == EndpointState.QUARANTINED:
+                        quarantined_at = current_time
+                        if current_state == EndpointState.RECOVERING:
+                            relapses += 1
+                    elif new_state == EndpointState.AVAILABLE:
+                        quarantined_at = None
+                        relapses = 0
                     current_state = new_state
                     result.state_transitions.append(current_state.value)
 
