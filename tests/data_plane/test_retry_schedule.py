@@ -196,10 +196,13 @@ async def test_success_marks_delivery_success_and_publishes_nothing(
 
 
 @pytest.mark.parametrize("action", [IsolationAction.QUARANTINE])
-async def test_quarantine_leaves_delivery_pending_and_durable(
+async def test_quarantine_dead_letters_the_delivery(
     action, deliveries, attempts, captured_publishes
 ):
-    """Must not mark FAILED -- that would drop work the policy only deferred."""
+    """
+    No retry under quarantine, and the delivery is DEAD_LETTER so the DLQ
+    and replay can reach it (ADR 0026). Left PENDING it was stranded.
+    """
     manager = RetryManager(deliveries=deliveries, attempts=attempts)
     event = make_event()
     delivery = Delivery(
@@ -212,7 +215,7 @@ async def test_quarantine_leaves_delivery_pending_and_durable(
     )
 
     assert work is None
-    assert deliveries.only().status == "PENDING"
+    assert deliveries.only().status == "DEAD_LETTER"
     assert captured_publishes == []
     assert attempts.numbers() == []
 
