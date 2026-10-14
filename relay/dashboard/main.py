@@ -6,6 +6,7 @@ import json
 import logging
 from pathlib import Path
 from typing import AsyncIterator, Optional
+from uuid import uuid4
 
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,11 +29,24 @@ logger = logging.getLogger(__name__)
 DASHBOARD_GROUP_ID = "relay-dashboard"
 
 
+def _consumer_group_id() -> str:
+    """
+    A consumer group of its own for each dashboard process.
+
+    The dashboard's state is a read model built from the policy topic, held
+    in memory. With a shared group, a restarted dashboard resumed after the
+    last committed offset and came back with empty charts. A new group
+    starts from the earliest offset, so every start rebuilds the history
+    from the log, which stays the source of truth.
+    """
+    return f"{DASHBOARD_GROUP_ID}-{uuid4().hex[:12]}"
+
+
 async def _consume_policy_events() -> None:
     """Consume policy evaluation events from Kafka and record into state_store."""
     consumer = KafkaConsumer(
         topics=[EVENTS_INTERNAL_POLICY_TOPIC],
-        group_id=DASHBOARD_GROUP_ID,
+        group_id=_consumer_group_id(),
     )
     try:
         await consumer.start()
