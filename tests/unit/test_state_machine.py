@@ -83,3 +83,44 @@ def test_recovery_conservatism():
             quarantine_threshold=30.0,
             recovery_threshold=90.0,
         )
+
+
+# --------------------------------------------------------------------------
+# RECOVERING probation (ADR 0023)
+# --------------------------------------------------------------------------
+
+
+def _eri(score: float, window_size: int) -> ERIScore:
+    eri = ERIScore.perfect(window_size=window_size)
+    object.__setattr__(eri, "score", score)
+    return eri
+
+
+@pytest.fixture
+def probation(thresholds):
+    return thresholds.model_copy(update={"recovery_min_samples": 10})
+
+
+def test_recovering_waits_for_the_minimum_samples(probation):
+    assert next_state(EndpointState.RECOVERING, _eri(100.0, 1), probation) == EndpointState.RECOVERING
+    assert next_state(EndpointState.RECOVERING, _eri(100.0, 9), probation) == EndpointState.RECOVERING
+    assert next_state(EndpointState.RECOVERING, _eri(100.0, 10), probation) == EndpointState.AVAILABLE
+
+
+def test_probation_never_delays_requarantine(probation):
+    assert next_state(EndpointState.RECOVERING, _eri(10.0, 1), probation) == EndpointState.QUARANTINED
+
+
+def test_no_probation_by_default_keeps_the_benchmark_model(thresholds):
+    assert thresholds.recovery_min_samples == 0
+    assert next_state(EndpointState.RECOVERING, _eri(100.0, 1), thresholds) == EndpointState.AVAILABLE
+
+
+def test_aede_service_reads_the_probation_from_the_environment(monkeypatch):
+    from relay.control_plane.aede.service import AEDEService
+
+    monkeypatch.setenv("AEDE_RECOVERY_MIN_SAMPLES", "7")
+    assert AEDEService(publish_events=False)._thresholds.recovery_min_samples == 7
+
+    monkeypatch.delenv("AEDE_RECOVERY_MIN_SAMPLES")
+    assert AEDEService(publish_events=False)._thresholds.recovery_min_samples == 0

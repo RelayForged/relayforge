@@ -166,6 +166,8 @@ services:
       AEDE_QUARANTINE_THRESHOLD: "30.0"
       # Short enough that a simulated outage collapses ERI within seconds.
       RELAY_WEBHOOK_TIMEOUT_SECONDS: "2"
+      # RECOVERING needs this many observations before AVAILABLE (ADR 0023).
+      AEDE_RECOVERY_MIN_SAMPLES: "25"
       # Dev-only signing secret; the simulator verifies with the same value.
       RELAY_HMAC_REQUIRED: "true"
       RELAY_WEBHOOK_SIGNING_SECRET: ${RELAY_WEBHOOK_SIGNING_SECRET:-relay-dev-signing-secret}

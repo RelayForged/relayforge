@@ -73,6 +73,8 @@ class AEDEService:
         )
         self._weights = weights or ERIWeights.optimal()
         quarantine_thresh = float(os.environ.get("AEDE_QUARANTINE_THRESHOLD", "30.0"))
+        # Probation length for RECOVERING (ADR 0023); 0 keeps the benchmark's model.
+        recovery_min_samples = int(os.environ.get("AEDE_RECOVERY_MIN_SAMPLES", "0"))
         # Wider hysteresis gaps than the original 80/90, 60/70: empirically, ERI during
         # sustained borderline (not catastrophic) degradation swings by ~40 points within the
         # sliding window (observed on a long-duration moderate-degradation scenario), which
@@ -88,6 +90,7 @@ class AEDEService:
             unstable_recovery_threshold=85.0,
             quarantine_threshold=quarantine_thresh,
             recovery_threshold=80.0,
+            recovery_min_samples=recovery_min_samples,
         )
         self._window_size = window_size
         # Fixed for the life of the service and passed to every synthesis
