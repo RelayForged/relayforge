@@ -17,7 +17,15 @@ Or as a context manager:
 from typing import Any, Dict, List, Optional
 import httpx
 
-from relay.sdk.exceptions import RelayAPIError, RelayConnectionError
+from relay.sdk._http import (
+    build_headers,
+    check_response,
+    endpoint_from,
+    event_detail_from,
+    replay_from,
+    subscription_from,
+)
+from relay.sdk.exceptions import RelayConnectionError
 from relay.sdk.models import (
     EndpointResponse,
     EventDetail,
@@ -35,6 +43,7 @@ class RelayClient:
         base_url: str = "http://localhost:8000",
         timeout: float = 10.0,
         transport: Optional[httpx.BaseTransport] = None,
+        api_key: Optional[str] = None,
     ) -> None:
         """Initialize the RelayClient.
 
@@ -42,12 +51,16 @@ class RelayClient:
             base_url: The base URL of the Relay FastAPI service.
             timeout: Request timeout in seconds.
             transport: Optional custom HTTPX transport (useful for tests/mocking).
+            api_key: Sent as the X-API-Key header on every request. Required
+                when the API runs with RELAY_API_KEYS set; omit it for an
+                unauthenticated dev API.
         """
         self.base_url = base_url.rstrip("/")
         self._http = httpx.Client(
             base_url=self.base_url,
             timeout=timeout,
             transport=transport,
+            headers=build_headers(api_key),
         )
 
     def _request(
@@ -66,31 +79,7 @@ class RelayClient:
         except Exception as exc:
             raise RelayConnectionError(f"Unexpected transport error connecting to Relay API: {exc}") from exc
 
-        if response.status_code != expected_status:
-            detail = ""
-            body_dict = None
-            try:
-                body_dict = response.json()
-                if isinstance(body_dict, dict):
-                    detail = body_dict.get("detail", str(body_dict))
-                else:
-                    detail = str(body_dict)
-            except Exception:
-                detail = response.text or f"Unexpected status {response.status_code}"
-
-            raise RelayAPIError(
-                status_code=response.status_code,
-                detail=detail,
-                response_body=body_dict if isinstance(body_dict, dict) else None,
-            )
-
-        try:
-            return response.json()
-        except Exception as exc:
-            raise RelayAPIError(
-                status_code=response.status_code,
-                detail=f"Failed to decode JSON response: {exc}",
-            ) from exc
+        return check_response(response, expected_status)
 
     def publish_event(
         self,
@@ -136,22 +125,7 @@ class RelayClient:
             path=f"/events/{event_id}",
             expected_status=200,
         )
-        correlation_id = data.get("correlation_id")
-        if isinstance(correlation_id, dict):
-            correlation_id = correlation_id.get("value", "")
-
-        causation_id = data.get("causation_id")
-        if isinstance(causation_id, dict):
-            causation_id = causation_id.get("value", "")
-
-        return EventDetail(
-            event_id=data["event_id"],
-            event_type=data["event_type"],
-            payload=data["payload"],
-            occurred_at=str(data.get("occurred_at", "")),
-            correlation_id=str(correlation_id),
-            causation_id=str(causation_id),
-        )
+        return event_detail_from(data)
 
     def register_endpoint(
         self,
@@ -177,13 +151,7 @@ class RelayClient:
             json_body={"target_url": target_url, "owner_id": owner_id},
             expected_status=201,
         )
-        return EndpointResponse(
-            endpoint_id=data["endpoint_id"],
-            target_url=data["target_url"],
-            owner_id=data["owner_id"],
-            created_at=str(data.get("created_at", "")),
-            is_active=data.get("is_active", True),
-        )
+        return endpoint_from(data)
 
     def create_subscription(
         self,
@@ -209,13 +177,7 @@ class RelayClient:
             json_body={"endpoint_id": endpoint_id, "event_types": event_types},
             expected_status=201,
         )
-        return SubscriptionResponse(
-            subscription_id=data["subscription_id"],
-            endpoint_id=data["endpoint_id"],
-            event_types=data["event_types"],
-            created_at=str(data.get("created_at", "")),
-            status=data.get("status", "ACTIVE"),
-        )
+        return subscription_from(data)
 
     def replay_dead_letters(
         self,
@@ -252,11 +214,7 @@ class RelayClient:
             json_body=body,
             expected_status=202,
         )
-        return ReplayResponse(
-            replay_id=data["replay_id"],
-            requested=data["requested"],
-            skipped=data.get("skipped", []),
-        )
+        return replay_from(data)
 
     def close(self) -> None:
         """Close the underlying HTTP client session."""
