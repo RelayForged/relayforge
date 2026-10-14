@@ -6,7 +6,8 @@ dashboard does, and exits non-zero if any step fails.
 
 Checks every route the UI calls (with the browser's CORS origin), then runs
 Normal -> Full Outage -> restore -> Recovery over the live WebSocket and
-checks the endpoint's states. Leaves the demo publisher stopped.
+checks the endpoint's states, then walks the policy fallback with a
+simulated AEDE outage. Leaves the demo publisher stopped and AEDE available.
 """
 from __future__ import annotations
 
@@ -61,6 +62,20 @@ async def watch_states(endpoint_id: str, until: set[str], timeout: float) -> lis
             if not seen or seen[-1] != message["state"]:
                 seen.append(message["state"])
             if message["state"] in until:
+                break
+    return seen
+
+
+async def watch_tiers(endpoint_id: str, until: int, timeout: float) -> list[int]:
+    """Serving policy tiers seen on the WebSocket, until `until` appears or time runs out."""
+    seen: list[int] = []
+    deadline = time.monotonic() + timeout
+    async with websockets.connect(f"{WS}?endpoint_id={endpoint_id}", origin=UI_ORIGIN) as ws:
+        while time.monotonic() < deadline:
+            tier = json.loads(await asyncio.wait_for(ws.recv(), timeout=10)).get("policy_tier")
+            if not seen or seen[-1] != tier:
+                seen.append(tier)
+            if tier == until:
                 break
     return seen
 
@@ -123,6 +138,15 @@ async def main() -> int:
         if replay is not None and replay.is_success:
             check(replay.json()["requested"] > 0, "Replay All requested deliveries",
                   f"{replay.json()['requested']} requested")
+
+    print("Policy fallback")
+    call(client, "POST", f"{API}/demo/scenario", json={"scenario": "normal"})
+    call(client, "POST", f"{API}/demo/aede", json={"available": False})
+    tiers = await watch_tiers(endpoint_id, 3, 60)
+    check(tiers[-2:] == [2, 3], "AEDE outage: Tier 2 then Tier 3", " -> ".join(map(str, tiers)))
+    call(client, "POST", f"{API}/demo/aede", json={"available": True})
+    tiers = await watch_tiers(endpoint_id, 1, 20)
+    check(tiers[-1:] == [1], "AEDE back: Tier 1", " -> ".join(map(str, tiers)))
 
     received = client.get(f"{SIMULATOR}/simulator/deliveries?limit=20").json()
     statuses = {item["signature_status"] for item in received}
