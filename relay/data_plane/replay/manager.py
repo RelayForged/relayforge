@@ -181,6 +181,8 @@ class ReplayManager:
             event_type=original.event_type,
             payload=original.payload,
             occurred_at=now,
+            # Same tenant routing as the original (ADR 0025).
+            channels=list(original.channels),
         )
         # Persist-first, as for any event: nothing reaches Kafka that is
         # not already in Postgres. save() is a no-op if it already exists.

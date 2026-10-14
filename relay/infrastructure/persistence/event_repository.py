@@ -42,6 +42,7 @@ class EventRepository:
                 event_type=event.event_type,
                 payload=event.payload,
                 occurred_at=event.occurred_at,
+                channels=list(event.channels),
             )
             .on_conflict_do_nothing(index_elements=["event_id"])
         )
@@ -65,4 +66,5 @@ class EventRepository:
             event_type=row.event_type,
             payload=row.payload,
             occurred_at=row.occurred_at,
+            channels=list(row.channels or []),
         )

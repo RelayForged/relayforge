@@ -207,8 +207,63 @@ services:
       retries: 5
       start_period: 10s
 
+  # Demo 2 (demo/SDK_DEMO.md): a payment gateway's merchants. Started only
+  # with `docker compose --profile sdk-demo up -d`.
+  store-acme: &merchant-store
+    profiles: ["sdk-demo"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: store-acme
+    command: ["uvicorn", "examples.merchant_store.app:app", "--host", "0.0.0.0", "--port", "8070"]
+    ports:
+      - "127.0.0.1:8071:8070"
+    environment:
+      MERCHANT_ID: acme
+      MERCHANT_NAME: Acme Store
+      RELAY_WEBHOOK_SIGNING_SECRET: ${RELAY_WEBHOOK_SIGNING_SECRET:-relay-dev-signing-secret}
+    volumes:
+      - acme_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8070/healthz || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  store-bluebird:
+    <<: *merchant-store
+    container_name: store-bluebird
+    ports:
+      - "127.0.0.1:8072:8070"
+    environment:
+      MERCHANT_ID: bluebird
+      MERCHANT_NAME: Bluebird Books
+      RELAY_WEBHOOK_SIGNING_SECRET: ${RELAY_WEBHOOK_SIGNING_SECRET:-relay-dev-signing-secret}
+    volumes:
+      - bluebird_data:/data
+
+  # The gateway's backend: runs the SDK scripts via `docker compose exec payflow ...`.
+  payflow:
+    profiles: ["sdk-demo"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: payflow
+    command: ["sleep", "infinity"]
+    environment:
+      RELAY_URL: http://api:8000
+      PAYFLOW_STATE: /data/merchants.json
+    volumes:
+      - payflow_data:/data
+    depends_on:
+      api:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   kafka_data:
   redis_data:
+  acme_data:
+  bluebird_data:
+  payflow_data:
 

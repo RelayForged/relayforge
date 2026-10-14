@@ -9,8 +9,10 @@ from relay.sdk.models import (
     EventDetail,
     EventResponse,
     ReplayResponse,
+    RestoreResponse,
     SubscriptionResponse,
 )
+from relay.sdk.webhooks import verify_signature
 
 __all__ = [
     "RelayClient",
@@ -21,5 +23,7 @@ __all__ = [
     "EventDetail",
     "EndpointResponse",
     "ReplayResponse",
+    "RestoreResponse",
     "SubscriptionResponse",
+    "verify_signature",
 ]

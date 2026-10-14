@@ -464,7 +464,7 @@ class Dispatcher:
 
     async def _fan_out(self, event: Event) -> None:
         targets = await self._subscriptions.list_active_targets_by_event_type(
-            event.event_type
+            event.event_type, event.channels
         )
         if not targets:
             return

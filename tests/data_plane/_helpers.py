@@ -160,7 +160,7 @@ class FakeSubscriptionRepository:
         self.calls: list[str] = []
 
     async def list_active_targets_by_event_type(
-        self, event_type: str
+        self, event_type: str, channels: Optional[list[str]] = None
     ) -> list[tuple[Subscription, Endpoint]]:
         self.calls.append(event_type)
         return [
@@ -169,6 +169,7 @@ class FakeSubscriptionRepository:
             if event_type in subscription.event_types
             and subscription.status == "ACTIVE"
             and endpoint.is_active
+            and subscription.receives(list(channels or []))
         ]
 
 

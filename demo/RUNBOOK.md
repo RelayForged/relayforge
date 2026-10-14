@@ -2,6 +2,8 @@
 
 The live demo of RelayForge in one place: how to start clean, what to click, what the audience should see, and what to do when something misbehaves. The full script with roles is in `docs/demo_implementation_plan.md` ("10-Minute Demo Script").
 
+Demo 2 (a payment gateway onboarding merchants with the SDK) has its own guide: `demo/SDK_DEMO.md`. `demoeset.ps1` prepares both.
+
 ## Before the audience arrives (10 minutes ahead)
 
 1. Start Docker Desktop.

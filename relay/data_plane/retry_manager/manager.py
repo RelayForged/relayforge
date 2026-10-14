@@ -7,6 +7,7 @@ capped at `max_delay_seconds` (Strategy A fields, not a reimplementation
 of Strategy A). The wait until `next_attempt_at` is encoded on the Kafka
 payload; this module never calls asyncio.sleep.
 """
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -28,6 +29,8 @@ from relay.kernel.policies.delivery_policy import (
 
 # Matches the Dispatcher: only QUARANTINE stops HTTP (ADR 0022).
 _SKIP_HTTP = frozenset({IsolationAction.QUARANTINE})
+
+logger = logging.getLogger(__name__)
 
 
 class RetryWork(BaseModel):
@@ -80,13 +83,24 @@ class RetryManager:
     ) -> Optional[RetryWork]:
         """
         After a worker attempt: SUCCESS, schedule a retry, or mark FAILED.
-        QUARANTINE leaves the Delivery durable (PENDING) with no HTTP.
+
+        Under QUARANTINE no retry is scheduled and the Delivery is marked
+        DEAD_LETTER (ADR 0026). Left PENDING it was stranded: its attempt-1
+        slot is taken, so it is not "parked", no retry is coming, and replay
+        could not see it.
         """
         if completed.success:
             await self._set_status(delivery, "SUCCESS")
             return None
 
         if policy.isolation_policy.action in _SKIP_HTTP:
+            logger.warning(
+                "Dead-lettering delivery_id=%s after attempt %s: endpoint %s is quarantined",
+                delivery.delivery_id,
+                completed.attempt_number,
+                delivery.endpoint_id,
+            )
+            await self._set_status(delivery, "DEAD_LETTER")
             return None
 
         if completed.attempt_number >= policy.retry_policy.max_retries:

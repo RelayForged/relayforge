@@ -11,6 +11,7 @@ record that can exceed the broker's max request size -- producing a
 persisted event that can never be published.
 """
 import json
+import re
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
@@ -27,11 +28,33 @@ MAX_PAYLOAD_BYTES = 256 * 1024
 MAX_EVENT_TYPE_LENGTH = 255
 MAX_OWNER_ID_LENGTH = 255
 MAX_EVENT_TYPES_PER_SUBSCRIPTION = 100
+# Channels route events to tenants (ADR 0025). Short identifiers only, so
+# they are safe in logs, URLs and array indexes.
+MAX_CHANNELS = 10
+CHANNEL_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
+
+
+def _validate_channels(value: List[str]) -> List[str]:
+    if len(value) > MAX_CHANNELS:
+        raise ValueError(f"at most {MAX_CHANNELS} channels allowed")
+    for channel in value:
+        if not CHANNEL_PATTERN.match(channel):
+            raise ValueError(
+                "each channel must be 1..64 characters of letters, digits, '_', '.', ':' or '-'"
+            )
+    return list(dict.fromkeys(value))
 
 
 class IngestEventRequest(BaseModel):
     event_type: str = Field(min_length=1, max_length=MAX_EVENT_TYPE_LENGTH)
     payload: Dict[str, Any]
+    # Delivered only to subscriptions with no channels or a shared one.
+    channels: List[str] = Field(default_factory=list)
+
+    @field_validator("channels")
+    @classmethod
+    def _bounded_channels(cls, value: List[str]) -> List[str]:
+        return _validate_channels(value)
 
     @field_validator("payload")
     @classmethod
@@ -69,6 +92,13 @@ class CreateEndpointRequest(BaseModel):
 class CreateSubscriptionRequest(BaseModel):
     endpoint_id: str = Field(min_length=1, max_length=64)
     event_types: List[str] = Field(default_factory=list)
+    # Empty: every event of these types. Otherwise only matching channels.
+    channels: List[str] = Field(default_factory=list)
+
+    @field_validator("channels")
+    @classmethod
+    def _bounded_channels(cls, value: List[str]) -> List[str]:
+        return _validate_channels(value)
 
     @field_validator("event_types")
     @classmethod
