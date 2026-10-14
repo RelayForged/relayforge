@@ -4,10 +4,12 @@ import asyncio
 from contextlib import asynccontextmanager, suppress
 import json
 import logging
+from pathlib import Path
 from typing import AsyncIterator, Optional
 
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from relay.api.chart import chart_router
 from relay.api.chart.stores import state_store
@@ -99,3 +101,11 @@ async def websocket_endpoint(
 ) -> None:
     await websocket.accept()
     await send_state_update(websocket, endpoint_id)
+
+
+# The built React UI (Dockerfile `frontend` stage), so the demo is one URL.
+# Mounted last so the chart API and /ws keep their routes. Absent until the
+# UI has been built; under `npm run dev` Vite serves it instead.
+FRONTEND_DIST = Path(__file__).parent / "frontend" / "dist"
+if FRONTEND_DIST.is_dir():
+    app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
