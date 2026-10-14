@@ -955,8 +955,9 @@ const thresholdBands = useMemo(() => {
             <strong>🚨 Endpoint Quarantined <HelpTip term="restore" /></strong>
             <span>
               {dashboardState.endpoint_id ?? "Current endpoint"} is isolated.
-              Relay has stopped sending to it and is holding its events. Fix the endpoint
-              (for example ▶ Normal), then bring it back.
+              Relay has stopped sending to it and is holding its events. It will re-check the
+              endpoint by itself after its quarantine hold; if you have fixed it (for example
+              ▶ Normal), bring it back now.
             </span>
           </div>
           <button

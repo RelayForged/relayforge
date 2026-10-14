@@ -52,8 +52,8 @@ const STATE_COLORS = {
 
 const STATE_ACTION = {
   AVAILABLE: "Delivering normally",
-  OBSERVED_DEGRADATION: "Sending fewer requests at once",
-  UNSTABLE: "One at a time, long gaps between retries",
+  OBSERVED_DEGRADATION: "Retrying more patiently (5 s and up)",
+  UNSTABLE: "Retrying rarely (15 s and up, at most 5 times)",
   QUARANTINED: "Stopped sending; holding events for replay",
   RECOVERING: "Probing carefully after a restore",
 };

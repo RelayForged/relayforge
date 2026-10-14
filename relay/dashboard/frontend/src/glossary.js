@@ -11,7 +11,7 @@ export const GLOSSARY = {
   states: {
     title: "The five states",
     body:
-      "AVAILABLE: healthy. OBSERVED_DEGRADATION: some problems, sending is slowed. UNSTABLE: frequent failures, one request at a time with long gaps. QUARANTINED: failing badly, Relay stops sending and holds the events. RECOVERING: back after a fix, on probation until it proves itself.",
+      "AVAILABLE: healthy, failures retried after 2 s. OBSERVED_DEGRADATION: some problems, retries wait longer (5 s and up). UNSTABLE: frequent failures, retries wait much longer (15 s and up) and are capped at 5. QUARANTINED: failing badly, Relay stops sending and holds the events; after a timed hold it probes the endpoint again by itself. RECOVERING: back after a fix, on probation until it proves itself.",
   },
   eri: {
     title: "Endpoint Reliability Index (ERI)",
@@ -81,7 +81,7 @@ export const GLOSSARY = {
   max_parallel: {
     title: "Max parallelism",
     body:
-      "How many deliveries to this endpoint may be in flight at the same time. Lowered when the endpoint struggles, so Relay does not pile on.",
+      "How many deliveries to this endpoint AEDE allows in flight at the same time; lowered when the endpoint struggles. Note: the live dispatcher does not enforce this limit yet (it keeps the first value it saw for each endpoint). The retry waits are enforced.",
   },
   queue_priority: {
     title: "Queue priority",
@@ -108,7 +108,7 @@ export const GLOSSARY = {
   isolation: {
     title: "Isolation",
     body:
-      "What Relay does with this endpoint as a whole. CONTINUE: normal. REDUCE_CONCURRENCY: fewer at once. PAUSE: one at a time with long gaps. QUARANTINE: stop sending entirely and hold events until it is restored.",
+      "What Relay does with this endpoint as a whole. CONTINUE: normal. REDUCE_CONCURRENCY: AEDE asks for fewer at once. PAUSE: AEDE asks for one at a time, with long waits before retries. QUARANTINE: stop sending entirely and hold events until it is restored.",
   },
   explainability: {
     title: "Policy explainability",
@@ -123,7 +123,7 @@ export const GLOSSARY = {
   dlq: {
     title: "Dead letter queue (DLQ)",
     body:
-      "Events that could not be delivered: retries ran out, or the endpoint was quarantined. Nothing is thrown away. Once the endpoint is healthy, Replay sends them again as new attempts; the original failed records are kept unchanged for the audit trail.",
+      "Events that could not be delivered: retries ran out, or the endpoint was quarantined. Nothing is thrown away. When the endpoint recovers, Relay resends them automatically; the Replay button sends them right away. Replays are new attempts; the original failed records are kept unchanged for the audit trail.",
   },
   dlq_reason: {
     title: "Why it is here",
@@ -138,7 +138,7 @@ export const GLOSSARY = {
   restore: {
     title: "Restore endpoint",
     body:
-      "An operator's \"I fixed it\" button. It moves a quarantined endpoint to RECOVERING, where it must deliver successfully for a while before it is fully trusted again. Held events are not resent automatically; use Replay in the dead letter queue.",
+      "The operator's \"I fixed it\" button, for when you do not want to wait. Relay also re-checks a quarantined endpoint by itself after a timed hold (30 s here, doubling each time the endpoint is still down). Either way it moves to RECOVERING and must deliver successfully for a while before it is trusted again; its held events are then resent automatically.",
   },
   strategies: {
     title: "Strategies A, B and C",
@@ -185,18 +185,18 @@ export const SCENARIO_GUIDE = {
   },
   early_degradation: {
     story: "The server starts struggling: 40% of requests fail or respond slowly.",
-    watch: "The score drifts into the yellow band and AEDE eases off by sending fewer requests at once.",
+    watch: "The score drifts into the yellow band and AEDE eases off: failed deliveries wait longer before they are retried.",
   },
   instability: {
     story: "Half of all requests now fail with a server error.",
-    watch: "State UNSTABLE: AEDE sends one request at a time with long gaps between retries.",
+    watch: "State UNSTABLE: failed deliveries now wait 15 s, then 30 s, and so on before a retry, so a struggling server is not hammered.",
   },
   full_outage: {
     story: "The server stops answering; every request times out.",
     watch: "The score collapses and the endpoint is QUARANTINED: Relay stops sending and holds the events in the dead letter queue.",
   },
   recovery: {
-    story: "The server is fixed and an operator brings the endpoint back.",
+    story: "The server is fixed and an operator brings the endpoint back straight away (without this, Relay would re-check it by itself after its quarantine hold).",
     watch: "RECOVERING for about ten seconds while it proves itself, then AVAILABLE. Replay the held events afterwards.",
   },
   rate_limiting: {
