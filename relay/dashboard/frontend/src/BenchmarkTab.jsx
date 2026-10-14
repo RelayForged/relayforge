@@ -10,7 +10,7 @@ import {
   YAxis,
 } from "recharts";
 
-const DASHBOARD_API = "http://127.0.0.1:8001";
+const DASHBOARD_API = "http://127.0.0.1:8000";
 
 const SCENARIO_IDS = [3, 4, 5, 9, 10, 12, 13, 14];
 
@@ -105,26 +105,43 @@ export default function BenchmarkTab() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
-  async function loadResults() {
+  useEffect(() => {
+  let cancelled = false;
+
+  const fetchResults = async () => {
     try {
       const response = await fetch(
         `${DASHBOARD_API}/api/chart/benchmark/results`,
       );
 
       if (!response.ok) {
-        throw new Error(`Unable to load benchmark results (${response.status})`);
+        throw new Error(
+          `Unable to load benchmark results (${response.status})`,
+        );
       }
 
       const payload = await response.json();
-      setRuns(Array.isArray(payload.runs) ? payload.runs : []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to load benchmark results.");
-    }
-  }
 
-  useEffect(() => {
-    loadResults();
-  }, []);
+      if (!cancelled) {
+        setRuns(Array.isArray(payload.runs) ? payload.runs : []);
+      }
+    } catch (err) {
+      if (!cancelled) {
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Unable to load benchmark results.",
+        );
+      }
+    }
+  };
+
+  void fetchResults();
+
+  return () => {
+    cancelled = true;
+  };
+}, []);
 
   async function runStrategies(strategies) {
     setLoading(true);
