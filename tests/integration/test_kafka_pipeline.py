@@ -212,17 +212,10 @@ async def test_full_kafka_chain_outage_quarantine_and_isolation():
     consumer = MockKafkaConsumerWatermark()
 
     # Seed 4 prior failed observations directly -- enough to already cross into QUARANTINED
-    # before dispatch begins (representing an outage already in progress). This is necessary,
-    # not just realistic padding: UNSTABLE's synthesized policy is IsolationAction.PAUSE, which
-    # the Dispatcher's `_SKIP_HTTP` set treats as "no further HTTP dispatch" -- so once an
-    # endpoint reaches UNSTABLE, no further telemetry can ever reach AEDEService through this
-    # test's single-shot dispatch loop (each `handle_message` call is independent; nothing
-    # re-probes a paused endpoint the way a real retry-manager redelivery cycle eventually
-    # would). Seeding only 3 observations left the endpoint at UNSTABLE *before* dispatch even
-    # started, which then blocks the 4th (dispatched) observation from ever arriving -- a
-    # deadlock. Seeding a 4th here, so QUARANTINED is reached before the stream starts, still
-    # exercises the real thing this test claims to verify: zero HTTP calls leak through the
-    # Dispatcher for a genuinely quarantined endpoint, across the entire 15-message stream.
+    # before dispatch begins (representing an outage already in progress). That is
+    # what this test is about: zero HTTP calls leak through the Dispatcher for a genuinely
+    # quarantined endpoint, across the entire 15-message stream. (This seeding once also
+    # worked around UNSTABLE's PAUSE stopping HTTP, a deadlock fixed by ADR 0022.)
     for _ in range(4):
         await aede_service.record_telemetry(
             Telemetry(

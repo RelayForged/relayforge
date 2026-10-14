@@ -26,7 +26,8 @@ from relay.kernel.policies.delivery_policy import (
     RetryPolicy,
 )
 
-_SKIP_HTTP = frozenset({IsolationAction.PAUSE, IsolationAction.QUARANTINE})
+# Matches the Dispatcher: only QUARANTINE stops HTTP (ADR 0022).
+_SKIP_HTTP = frozenset({IsolationAction.QUARANTINE})
 
 
 class RetryWork(BaseModel):
@@ -79,7 +80,7 @@ class RetryManager:
     ) -> Optional[RetryWork]:
         """
         After a worker attempt: SUCCESS, schedule a retry, or mark FAILED.
-        PAUSE / QUARANTINE leaves the Delivery durable (PENDING) with no HTTP.
+        QUARANTINE leaves the Delivery durable (PENDING) with no HTTP.
         """
         if completed.success:
             await self._set_status(delivery, "SUCCESS")

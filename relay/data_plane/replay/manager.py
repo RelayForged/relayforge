@@ -10,7 +10,8 @@ supplies the policy and a quarantined endpoint is still left alone.
 
 Two cases, by why the delivery is stuck:
 
-- PARKED (PENDING, never attempted, skipped under PAUSE/QUARANTINE):
+- PARKED (PENDING, never attempted, skipped under QUARANTINE; under PAUSE
+  before ADR 0022):
   the original Event is dispatched again to the same subscription. The
   Delivery row already exists and its attempt 1 is unclaimed.
 - FAILED / DEAD_LETTER: a new Event is created with the same type,

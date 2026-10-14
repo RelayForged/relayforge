@@ -76,7 +76,11 @@ DEFAULT_MAX_IN_FLIGHT_RETRIES = 500
 
 logger = logging.getLogger(__name__)
 
-_SKIP_HTTP = frozenset({IsolationAction.PAUSE, IsolationAction.QUARANTINE})
+# Only QUARANTINE stops HTTP (ADR 0022). PAUSE is throttled delivery: its
+# policy's backoff and max_parallel apply, and the attempts it lets through
+# are the telemetry that lets an UNSTABLE endpoint recover. Skipping HTTP
+# under PAUSE as well left UNSTABLE with no way out.
+_SKIP_HTTP = frozenset({IsolationAction.QUARANTINE})
 _TERMINAL_STATUSES = frozenset({"SUCCESS", "FAILED", "DEAD_LETTER"})
 
 
