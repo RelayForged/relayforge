@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_fastapi_instrumentator import Instrumentator, metrics as http_metrics
 
 from relay.api.demo import controller as demo_controller, demo_enabled, router as demo_router
 from relay.api.endpoints import router as endpoints_router
@@ -44,6 +45,18 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+# HTTP-traffic metrics only (request count and latency per route). Delivery,
+# ERI and state series come from the dispatcher process, which exports them on
+# its own port (relay/infrastructure/monitoring/metrics.py).
+#
+# Registered explicitly rather than taking the library defaults: the default
+# request-size metric does int(Content-Length) on the raw header, which raises
+# on a malformed value and would turn BodySizeLimitMiddleware's 400 into an
+# unhandled error. Neither metric below reads that header.
+Instrumentator().add(http_metrics.requests()).add(http_metrics.latency()).instrument(
+    app
+).expose(app, endpoint="/metrics", include_in_schema=False)
 
 app.include_router(events_router)
 app.include_router(endpoints_router)

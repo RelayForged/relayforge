@@ -1,0 +1,85 @@
+# Prometheus. The scrape config is NOT duplicated here: deploy/prometheus.yml is
+# the single source and is loaded into the ConfigMap below with
+#
+#   kubectl -n relay create configmap prometheus-config \
+#     --from-file=prometheus.yml=deploy/prometheus.yml \
+#     --dry-run=client -o yaml | kubectl apply -f -
+#
+# Its targets (api:8000, dispatcher:9100) match the Service names in this
+# directory tree, so the same file works in compose and in the cluster.
+# Storage is an emptyDir: metrics are lost when the pod is rescheduled (demo).
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: relay
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: relay
+spec:
+  selector:
+    app.kubernetes.io/name: prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: relay
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/part-of: relay
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: prometheus
+        app.kubernetes.io/part-of: relay
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.51.0
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+          ports:
+            - name: http
+              containerPort: 9090
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+              readOnly: true
+            - name: data
+              mountPath: /prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+        - name: data
+          emptyDir: {}

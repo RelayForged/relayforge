@@ -1,0 +1,12 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    # Fixed uid so dashboards provisioned from deploy/grafana/dashboards can
+    # reference the datasource without looking it up.
+    uid: relay-prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false

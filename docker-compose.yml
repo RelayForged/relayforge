@@ -169,6 +169,11 @@ services:
       # Dev-only signing secret; the simulator verifies with the same value.
       RELAY_HMAC_REQUIRED: "true"
       RELAY_WEBHOOK_SIGNING_SECRET: ${RELAY_WEBHOOK_SIGNING_SECRET:-relay-dev-signing-secret}
+      # Port for the dispatcher's own Prometheus exporter. Nothing listens on
+      # it until the dispatcher calls start_metrics_server() at startup.
+      RELAY_METRICS_PORT: "9100"
+    ports:
+      - "127.0.0.1:9100:9100"
     depends_on:
       postgres:
         condition: service_healthy
@@ -178,6 +183,37 @@ services:
         condition: service_completed_successfully
       simulator:
         condition: service_started
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: relay-prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      - api
+      - dispatcher
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: relay-grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      # Local development only: change before exposing this anywhere.
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-relay-grafana-dev}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      # relay.json (Person B) is dropped here and picked up by the provider.
+      - ./deploy/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
 
   dashboard:
     build:
@@ -207,4 +243,6 @@ volumes:
   postgres_data:
   kafka_data:
   redis_data:
+  prometheus_data:
+  grafana_data:
 

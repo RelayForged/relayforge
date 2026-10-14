@@ -1,0 +1,54 @@
+# Schema migration, the equivalent of the compose `migrator` service. Not in
+# the original T10 file list, but nothing works without the tables: run this
+# first and wait for it to complete before starting the API and dispatcher.
+#
+# A Job is immutable once created. To re-run after a new migration:
+#   kubectl -n relay delete job relay-migrate && kubectl apply -f deploy/k8s/postgres/migrate-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: relay-migrate
+  namespace: relay
+  labels:
+    app.kubernetes.io/name: relay-migrate
+    app.kubernetes.io/part-of: relay
+spec:
+  # Postgres may not be accepting connections yet; let the Job retry.
+  backoffLimit: 10
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: relay-migrate
+        app.kubernetes.io/part-of: relay
+    spec:
+      restartPolicy: OnFailure
+      enableServiceLinks: false
+      containers:
+        - name: migrate
+          image: relay:latest
+          imagePullPolicy: IfNotPresent
+          command: ["alembic", "upgrade", "head"]
+          envFrom:
+            - configMapRef:
+                name: relay-config
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: relay-secrets
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: relay-secrets
+                  key: POSTGRES_PASSWORD
+            - name: DATABASE_URL
+              value: postgresql+psycopg://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgres:5432/relaydb
+            - name: ASYNC_DATABASE_URL
+              value: postgresql+asyncpg://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgres:5432/relaydb
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 256Mi

@@ -1,0 +1,38 @@
+# KEDA alternative to hpa.yaml: scale the dispatcher on Kafka consumer lag.
+# Requires KEDA to be installed in the cluster (https://keda.sh).
+#
+# Apply this INSTEAD OF hpa.yaml, never alongside it. KEDA creates its own HPA
+# for the target, and two HPAs on one Deployment fight each other. To switch:
+#   kubectl -n relay delete hpa relay-dispatcher
+#   kubectl apply -f deploy/k8s/relay-dispatcher/scaledobject.yaml
+#
+# No `topic` is set on purpose. The dispatcher's group reads four topics
+# (events.business, events.internal.delivery, events.internal.endpoint,
+# events.internal.replay), so KEDA sums lag across all of them. Naming only
+# events.business would ignore the retry and replay backlog.
+#
+# maxReplicaCount equals KAFKA_TOPIC_PARTITIONS (configmap.yaml): extra
+# replicas beyond the partition count cannot take work.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: relay-dispatcher
+  namespace: relay
+  labels:
+    app.kubernetes.io/name: relay-dispatcher
+    app.kubernetes.io/part-of: relay
+spec:
+  scaleTargetRef:
+    name: relay-dispatcher
+  minReplicaCount: 1
+  maxReplicaCount: 3
+  pollingInterval: 15
+  cooldownPeriod: 120
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: kafka:9092
+        consumerGroup: relay-dispatcher
+        # Scale out by one replica per 50 messages of total lag.
+        lagThreshold: "50"
+        offsetResetPolicy: latest

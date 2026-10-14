@@ -1,0 +1,9 @@
+# Decision: Typed internal event models are domain-only for now
+
+- **Context:** T13 closes the empty `relay/kernel/events/` stub. Person A authors the base type and the delivery and operational events; Person B adds policy, endpoint and replay events as separate modules.
+
+- **Decision:** `InternalEvent` (`base.py`) is a frozen Pydantic model carrying `correlation_id: CorrelationID`, `causation_id: CausationID` and a UTC `occurred_at`. `DeliveryAttemptStarted`, `DeliveryAttemptCompleted`, `DeliveryFailed` (`delivery_events.py`) and `DeadLetterRouted`, `AlertTriggered` (`operational_events.py`) subclass it and add fields only. The package imports `pydantic` and the existing identifier value objects, nothing else. Existing kernel modules are untouched.
+  - **Why:** the kernel is frozen (ADR 0010) and must not depend on `httpx`, `aiokafka`, FastAPI or SQLAlchemy; a test asserts that. `DeliveryFailed.status` and `DeadLetterRouted.reason` are `Literal` types, so a value outside the documented sets (`FAILED` / `DEAD_LETTER`, and those plus `PARKED`) fails validation instead of being stored. `occurred_at` has a default factory like `Event.occurred_at`, but no method on these types reads the clock or the environment.
+
+- **Not changed:** these types are **not** the Kafka payloads. The dispatcher, retry manager and replay path still publish their own models (`RetryWork`, `ReplayWork`, the policy-evaluation messages), and nothing in the pipeline constructs an `InternalEvent` yet.
+  - **Why:** switching live payloads changes the wire format between a producer and a consumer that may be on different versions during a rollout, and it touches the dispatcher, which is Person B's area this sprint. The models give both sides one vocabulary to migrate to; the migration itself is a separate, tested change.

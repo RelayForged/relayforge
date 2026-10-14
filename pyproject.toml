@@ -21,6 +21,10 @@ dependencies = [
     "httpx>=0.27",
     # relay/infrastructure/config_loader.py imports yaml; it was never declared.
     "pyyaml>=6.0",
+    # Metrics (T7). In the main list, not an extra: the Compose image installs
+    # only these, and the API and dispatcher both import the metrics module.
+    "prometheus-client>=0.20",
+    "prometheus-fastapi-instrumentator>=7.0",
 ]
 
 [project.optional-dependencies]

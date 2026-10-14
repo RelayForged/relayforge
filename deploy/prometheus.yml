@@ -1,0 +1,24 @@
+# Prometheus scrape config (T7). Mounted into the compose `prometheus` service.
+#
+# Two targets, because two processes emit metrics:
+#   api         HTTP traffic only (prometheus-fastapi-instrumentator, GET /metrics)
+#   dispatcher  delivery attempts, ERI, endpoint state, retries
+#               (relay/infrastructure/monitoring/metrics.py, RELAY_METRICS_PORT)
+#
+# The dispatcher target reports DOWN until the dispatcher calls
+# start_metrics_server() at startup. That call is wired by Person B; until then
+# DOWN is expected, not a fault.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api:8000"]
+
+  - job_name: dispatcher
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["dispatcher:9100"]

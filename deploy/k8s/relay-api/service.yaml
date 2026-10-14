@@ -1,0 +1,17 @@
+# Named `api`, the same hostname as the compose service, so deploy/prometheus.yml
+# (target api:8000) works unchanged inside the cluster.
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: relay
+  labels:
+    app.kubernetes.io/name: relay-api
+    app.kubernetes.io/part-of: relay
+spec:
+  selector:
+    app.kubernetes.io/name: relay-api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http

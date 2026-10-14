@@ -1,0 +1,43 @@
+# Non-secret environment shared by every Relay workload via envFrom.
+# Mirrors the environment blocks in docker-compose.yml; secrets live in secret.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: relay-config
+  namespace: relay
+  labels:
+    app.kubernetes.io/part-of: relay
+data:
+  # Outside "dev", persistence refuses the Compose default credentials and the
+  # API refuses requests until RELAY_API_KEYS is set (see secret.yaml).
+  RELAY_ENV: "production"
+  POSTGRES_DB: "relaydb"
+
+  KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+  # More than one partition is what lets a second dispatcher replica do work;
+  # the dispatcher autoscalers are capped at this number. Topics are created
+  # with this value once, so changing it later does not resize existing topics.
+  KAFKA_TOPIC_PARTITIONS: "3"
+  KAFKA_TOPIC_REPLICATION_FACTOR: "1"
+
+  AEDE_ENABLED: "true"
+  ERI_ENABLED: "true"
+  STATE_MACHINE_ENABLED: "true"
+  AEDE_QUARANTINE_THRESHOLD: "45.0"
+
+  # The demo target is a private cluster address, which the SSRF guard blocks
+  # by default. Set to "false" for any real deployment.
+  RELAY_ALLOW_PRIVATE_TARGETS: "true"
+  RELAY_WEBHOOK_TIMEOUT_SECONDS: "2"
+  RELAY_HMAC_REQUIRED: "true"
+
+  # Port of the dispatcher's own Prometheus exporter. Nothing listens on it until
+  # the dispatcher calls start_metrics_server() at startup.
+  RELAY_METRICS_PORT: "9100"
+
+  # Demo scenario engine (relay/api/demo.py) and its simulator target.
+  RELAY_DEMO_ENABLED: "true"
+  SIMULATOR_URL: "http://simulator:8080"
+
+  # Browser origins allowed to call the API, dashboard and simulator.
+  RELAY_CORS_ORIGINS: "http://localhost:5173,http://127.0.0.1:5173"

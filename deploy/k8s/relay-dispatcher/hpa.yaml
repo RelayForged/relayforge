@@ -1,0 +1,31 @@
+# Default autoscaler for the dispatcher: CPU only, works without KEDA.
+#
+# Apply this OR scaledobject.yaml, never both. KEDA builds its own HPA for the
+# same Deployment, and two HPAs on one target fight each other. See README-k8s.md.
+#
+# maxReplicas equals KAFKA_TOPIC_PARTITIONS (configmap.yaml): a consumer group
+# cannot use more members than a topic has partitions, so replicas beyond that
+# would sit idle. Scaling past one replica also splits per-endpoint ERI state;
+# see the dispatcher caveat in README-k8s.md.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: relay-dispatcher
+  namespace: relay
+  labels:
+    app.kubernetes.io/name: relay-dispatcher
+    app.kubernetes.io/part-of: relay
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: relay-dispatcher
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
