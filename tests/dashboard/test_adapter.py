@@ -22,7 +22,7 @@ def test_get_delivery_events_returns_empty_until_data_plane_is_connected() -> No
 def test_policy_decision_contains_full_dashboard_fields() -> None:
     source = DashboardDemoSource()
 
-    _, state, policy, _ = source.next_evaluation()
+    _, state, policy, _, _ = source.next_evaluation()
 
     decision = get_policy_decision(policy)
 
@@ -39,7 +39,7 @@ def test_policy_decision_contains_full_dashboard_fields() -> None:
 def test_policy_explanation_contains_state_transition_information() -> None:
     source = DashboardDemoSource()
 
-    _, _, policy, explanation = source.next_evaluation()
+    _, _, policy, explanation, _ = source.next_evaluation()
 
     result = get_policy_explanation(explanation)
 
@@ -55,7 +55,7 @@ def test_policy_explanation_contains_state_transition_information() -> None:
 def test_build_state_update_has_complete_dashboard_sections() -> None:
     source = DashboardDemoSource()
 
-    eri, state, policy, explanation = source.next_evaluation()
+    eri, state, policy, explanation, _ = source.next_evaluation()
 
     update = build_state_update(
         state=state.value,

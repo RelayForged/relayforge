@@ -221,4 +221,14 @@ class DashboardDemoSource:
 
         self.state = EndpointState(policy.endpoint_state)
 
-        return int(round(eri.score)), self.state, policy, explanation
+        sub_scores = {
+            "success_rate": eri.success_rate_score,
+            "latency": eri.latency_score,
+            "consecutive_failures": eri.consecutive_failure_score,
+            "timeout_rate": eri.timeout_score,
+            "http_5xx_rate": eri.http_5xx_score,
+            "queue_depth": eri.queue_depth_score,
+            "recovery_trend": eri.recovery_trend_score,
+        }
+
+        return int(round(eri.score)), self.state, policy, explanation, sub_scores

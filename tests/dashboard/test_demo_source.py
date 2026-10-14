@@ -31,12 +31,13 @@ def test_demo_source_produces_policy_and_explanation() -> None:
     source = DashboardDemoSource()
 
     for _ in range(80):
-        score, state, policy, explanation = source.next_evaluation()
+        score, state, policy, explanation, _ = source.next_evaluation()
 
         assert score >= 0
         assert state in EndpointState
         assert policy.endpoint_id == source.endpoint_id
         assert explanation.endpoint_id == source.endpoint_id
+
 
 def test_demo_source_uses_telemetry_for_evaluation() -> None:
     source = DashboardDemoSource()
@@ -68,6 +69,7 @@ def test_demo_source_records_sustained_failures() -> None:
     assert any(attempt.timed_out for attempt in failures)
     assert any(attempt.http_status == 500 for attempt in failures)
 
+
 def test_demo_source_accepts_fault_injection_configuration() -> None:
     source = DashboardDemoSource(
         failure_rate=0.5,
@@ -96,6 +98,7 @@ def test_demo_source_rejects_unknown_failure_mode() -> None:
         pass
     else:
         raise AssertionError("Expected invalid failure_mode to raise")
+
 
 def test_timeout_failure_mode_generates_timeouts() -> None:
     source = DashboardDemoSource(
