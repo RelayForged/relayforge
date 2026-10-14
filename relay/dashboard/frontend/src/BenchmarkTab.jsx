@@ -661,7 +661,7 @@ export default function BenchmarkTab() {
                       <td>{run.scenario_id ?? "—"}</td>
                       <td>{strategyLabel(run.strategy)}</td>
                       <td>
-                        {formatMetric(run.delivery_success_rate * 100, "success_rate")}
+                        {formatMetric(run.delivery_success_rate, "success_rate")}
                       </td>
                       <td>{formatMetric(run.total_wasted_retries, "wasted_retries")}</td>
                       <td>{formatMetric(run.avg_retry_count, "retry_count")}</td>

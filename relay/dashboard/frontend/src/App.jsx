@@ -149,8 +149,9 @@ const recordStateTransition = (update) => {
       explanation.record_id ??
       `${explanation.evaluated_at}-${explanation.state_before}-${explanation.state_after}`,
     evaluatedAt: explanation.evaluated_at,
-    stateBefore: explanation.state_before,
-    stateAfter: explanation.state_after,
+eri: update.eri,
+stateBefore: explanation.state_before,
+stateAfter: explanation.state_after,
     triggeredThresholds: explanation.triggered_thresholds ?? [],
     strategyUsed: explanation.strategy_used ?? "--",
     reason: explanation.reason ?? "--",
@@ -293,24 +294,47 @@ const applyScenarioPreset = (preset) => {
     }
 
     const scenarioProfiles = {
-      normal: { failure_rate: 0.0, latency_ms: 150, failure_mode: "mixed" },
-      early_degradation: {
-        failure_rate: 0.4,
-        latency_ms: 500,
-        failure_mode: "mixed",
-      },
-      instability: {
-        failure_rate: 0.75,
-        latency_ms: 750,
-        failure_mode: "http_500",
-      },
-      full_outage: {
-        failure_rate: 1.0,
-        latency_ms: 1500,
-        failure_mode: "timeout",
-      },
-      recovery: { failure_rate: 0.0, latency_ms: 150, failure_mode: "mixed" },
-    };
+  normal: {
+    failure_rate: 0.0,
+    latency_ms: 150,
+    failure_mode: "mixed",
+  },
+  early_degradation: {
+    failure_rate: 0.4,
+    latency_ms: 500,
+    failure_mode: "mixed",
+  },
+  instability: {
+    failure_rate: 0.75,
+    latency_ms: 750,
+    failure_mode: "http_500",
+  },
+  full_outage: {
+    failure_rate: 1.0,
+    latency_ms: 1500,
+    failure_mode: "timeout",
+  },
+  recovery: {
+    failure_rate: 0.0,
+    latency_ms: 150,
+    failure_mode: "mixed",
+  },
+  rate_limiting: {
+    failure_rate: 0.8,
+    latency_ms: 150,
+    failure_mode: "rate_limit",
+  },
+  auth_failure: {
+    failure_rate: 1.0,
+    latency_ms: 150,
+    failure_mode: "auth_failure",
+  },
+  network_partition: {
+    failure_rate: 1.0,
+    latency_ms: 150,
+    failure_mode: "connection_reset",
+  },
+};
 
     const profile = scenarioProfiles[preset.id];
     if (!profile) {
@@ -1326,6 +1350,15 @@ const thresholdBands = useMemo(() => {
           Delivery: {event.delivery_id}
         </span>
       )}
+
+      {event.signature && (
+  <span
+    className="signature-badge"
+    title={`X-Relay-Signature: ${event.signature}`}
+  >
+    X-Relay-Signature: {event.signature}
+  </span>
+)}
 
       {event.error_message && (
         <span className="timeline-error">
