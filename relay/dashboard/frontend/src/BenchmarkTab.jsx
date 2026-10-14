@@ -10,7 +10,7 @@ import {
   YAxis,
 } from "recharts";
 
-const DASHBOARD_API = "http://127.0.0.1:8000";
+import { DASHBOARD_URL } from "./config";
 
 const SCENARIO_IDS = [3, 4, 5, 9, 10, 12, 13, 14];
 
@@ -42,12 +42,6 @@ const METRICS = {
     ),
     format: (value) => `${Number(value).toFixed(1)}%`,
     axisLabel: "Success rate (%)",
-  },
-  mttr: {
-    label: "MTTR",
-    value: (run) => run.avg_recovery_time_seconds,
-    format: (value) => `${Number(value).toFixed(1)} s`,
-    axisLabel: "Average recovery time (s)",
   },
 };
 
@@ -111,7 +105,7 @@ export default function BenchmarkTab() {
   const fetchResults = async () => {
     try {
       const response = await fetch(
-        `${DASHBOARD_API}/api/chart/benchmark/results`,
+        `${DASHBOARD_URL}/api/chart/benchmark/results`,
       );
 
       if (!response.ok) {
@@ -150,7 +144,7 @@ export default function BenchmarkTab() {
 
     try {
       const response = await fetch(
-        `${DASHBOARD_API}/api/chart/benchmark/run`,
+        `${DASHBOARD_URL}/api/chart/benchmark/run`,
         {
           method: "POST",
           headers: {
