@@ -890,7 +890,7 @@
   font-size: 0.85rem;
 }
 
-.aede-switch button {
+.aede-switch > button {
   border: 0;
   border-radius: 8px;
   padding: 7px 12px;
@@ -1043,4 +1043,85 @@
     align-items: flex-start;
     flex-direction: column;
   }
+}
+
+/* "?" explainers (HelpTip.jsx) */
+.help-tip {
+  display: inline-flex;
+  vertical-align: middle;
+  margin-left: 4px;
+}
+
+.help-tip-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid rgba(100, 116, 139, 0.45);
+  border-radius: 50%;
+  background: #ffffff;
+  color: #475569;
+  font: 700 11px/1 system-ui, sans-serif;
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.help-tip-button:hover,
+.help-tip-button[aria-expanded="true"] {
+  border-color: #2563eb;
+  color: #2563eb;
+}
+
+.help-tip-popover {
+  position: fixed;
+  z-index: 1000;
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  border-radius: 10px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font: 400 13px/1.45 system-ui, sans-serif;
+  text-align: left;
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: normal;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.3);
+}
+
+.help-tip-popover strong {
+  color: #ffffff;
+  font-size: 13px;
+}
+
+.state-content .state-restore {
+  margin-left: 12px;
+}
+
+.restore-notice {
+  margin: 12px 0 0;
+  color: #475569;
+  font-size: 0.85rem;
+}
+
+.scenario-guide {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-left: 3px solid #2563eb;
+  border-radius: 6px;
+  background: rgba(37, 99, 235, 0.06);
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.scenario-guide p {
+  margin: 0;
+}
+
+.scenario-guide p + p {
+  margin-top: 4px;
 }

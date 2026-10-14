@@ -21,6 +21,8 @@ import {
 } from "recharts";
 import "./App.css";
 import BenchmarkTab from "./BenchmarkTab";
+import HelpTip from "./HelpTip";
+import { SCENARIO_GUIDE } from "./glossary";
 import {
   API_URL,
   DASHBOARD_URL,
@@ -309,6 +311,46 @@ stateAfter: explanation.state_after,
       setAedeSwitchError(
         error instanceof Error ? error.message : "AEDE switch failed.",
       );
+    }
+  };
+
+  const [restoreNotice, setRestoreNotice] = useState("");
+
+  const restoreEndpoint = async () => {
+    const endpointId = dashboardState.endpoint_id;
+    if (!endpointId) {
+      return;
+    }
+    setRestoreNotice("");
+    try {
+      const response = await fetch(
+        `${API_URL}/endpoints/${encodeURIComponent(endpointId)}/restore`,
+        { method: "POST" },
+      );
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(
+          typeof payload.detail === "string"
+            ? payload.detail
+            : JSON.stringify(payload.detail ?? payload),
+        );
+      }
+      setRestoreNotice(
+        "Restore requested: the endpoint is on probation (RECOVERING). Replay held events from the dead letter queue.",
+      );
+    } catch (error) {
+      setAlerts((previousAlerts) => [
+        {
+          id: `restore-${Date.now()}`,
+          state: "RESTORE_ERROR",
+          endpointId,
+          eri: formatEri(dashboardState.eri),
+          successRate: "--",
+          title: "Restore request failed",
+          message: error instanceof Error ? error.message : "Unable to restore endpoint.",
+        },
+        ...previousAlerts,
+      ].slice(0, 5));
     }
   };
 
@@ -893,7 +935,8 @@ const thresholdBands = useMemo(() => {
             <strong>
               {dashboardState.policy_tier === 2
                 ? "⚠ Policy fallback: Tier 2 — cached policy"
-                : "⚠ Policy fallback: Tier 3 — static defaults"}
+                : "⚠ Policy fallback: Tier 3 — static defaults"}{" "}
+              <HelpTip term="policy_tier" />
             </strong>
             <span>
               {dashboardState.policy_tier === 2
@@ -907,49 +950,19 @@ const thresholdBands = useMemo(() => {
       {dashboardState.state === "QUARANTINED" && (
         <section className="quarantine-banner" role="alert">
           <div>
-            <strong>🚨 Endpoint Quarantined</strong>
+            <strong>🚨 Endpoint Quarantined <HelpTip term="restore" /></strong>
             <span>
               {dashboardState.endpoint_id ?? "Current endpoint"} is isolated.
-              New deliveries are paused until the endpoint is restored.
+              Relay has stopped sending to it and is holding its events. Fix the endpoint
+              (for example ▶ Normal), then bring it back.
             </span>
           </div>
           <button
             type="button"
             className="restore-button"
-            onClick={async () => {
-              const endpointId = dashboardState.endpoint_id;
-              if (!endpointId) {
-                return;
-              }
-              try {
-                const response = await fetch(`${API_URL}/endpoints/${encodeURIComponent(endpointId)}/restore`, {
-                  method: "POST",
-                });
-                const payload = await response.json();
-                if (!response.ok) {
-                  throw new Error(
-                    typeof payload.detail === "string"
-                      ? payload.detail
-                      : JSON.stringify(payload.detail ?? payload),
-                  );
-                }
-              } catch (error) {
-                setAlerts((previousAlerts) => [
-                  {
-                    id: `restore-${Date.now()}`,
-                    state: "RESTORE_ERROR",
-                    endpointId,
-                    eri: formatEri(dashboardState.eri),
-                    successRate: "--",
-                    title: "Restore request failed",
-                    message: error instanceof Error ? error.message : "Unable to restore endpoint.",
-                  },
-                  ...previousAlerts,
-                ].slice(0, 5));
-              }
-            }}
+            onClick={() => void restoreEndpoint()}
           >
-            Restore Endpoint
+            Bring endpoint back
           </button>
         </section>
       )}
@@ -1018,7 +1031,7 @@ const thresholdBands = useMemo(() => {
           <div className="card-header">
             <div>
               <h2 className="card-title">
-                Endpoint State
+                Endpoint State <HelpTip term="endpoint_state" />
               </h2>
 
               <p className="card-description">
@@ -1033,14 +1046,26 @@ const thresholdBands = useMemo(() => {
             >
               {dashboardState.state}
             </span>
+            {dashboardState.state === "QUARANTINED" && (
+              <button
+                type="button"
+                className="restore-button state-restore"
+                onClick={() => void restoreEndpoint()}
+              >
+                Bring endpoint back
+              </button>
+            )}
           </div>
+          {restoreNotice && dashboardState.state !== "QUARANTINED" && (
+            <p className="restore-notice">{restoreNotice}</p>
+          )}
         </article>
 
         <article className="dashboard-card eri-card">
           <div className="card-header">
             <div>
               <h2 className="card-title">
-                Endpoint Reliability Index
+                Endpoint Reliability Index <HelpTip term="eri" />
               </h2>
 
               <p className="card-description">
@@ -1064,7 +1089,7 @@ const thresholdBands = useMemo(() => {
           <div className="card-header">
             <div>
               <h2 className="card-title">
-                Live Stream
+                Live Stream <HelpTip term="live_stream" />
               </h2>
 
               <p className="card-description">
@@ -1086,7 +1111,7 @@ const thresholdBands = useMemo(() => {
   <div className="card-header">
     <div>
       <h2 className="card-title">
-        Fault Injection
+        Fault Injection <HelpTip term="fault_injection" />
       </h2>
 
       <p className="card-description">
@@ -1176,7 +1201,7 @@ const thresholdBands = useMemo(() => {
     {faultError && <div className="dlq-error">{faultError}</div>}
 
 <div className="scenario-presets">
-  <p className="fault-label">Scenario presets</p>
+  <p className="fault-label">Scenario presets <HelpTip term="scenario_presets" /></p>
 
   <div className="scenario-preset-buttons">
     {scenarioPresets.map((preset) => (
@@ -1187,6 +1212,7 @@ const thresholdBands = useMemo(() => {
     activeScenario === preset.id ? "active" : ""
   }`}
   onClick={() => applyScenarioPreset(preset)}
+  title={SCENARIO_GUIDE[preset.id]?.story}
 >
   {preset.label}
 </button>
@@ -1196,7 +1222,7 @@ const thresholdBands = useMemo(() => {
   {dashboardState.source === "live" && (
     <div className="aede-switch">
       <span>
-        Policy engine (AEDE):{" "}
+        Policy engine (AEDE) <HelpTip term="aede_outage" />:{" "}
         <strong>{aedeAvailable ? "available" : "simulated outage"}</strong>
       </span>
       <button
@@ -1218,6 +1244,13 @@ const thresholdBands = useMemo(() => {
       )?.label ?? "None selected"}
     </strong>
   </p>
+
+  {activeScenario && SCENARIO_GUIDE[activeScenario] && (
+    <div className="scenario-guide">
+      <p><strong>What's happening:</strong> {SCENARIO_GUIDE[activeScenario].story}</p>
+      <p><strong>Watch for:</strong> {SCENARIO_GUIDE[activeScenario].watch}</p>
+    </div>
+  )}
 </div>
   </div>
 </article>
@@ -1226,7 +1259,7 @@ const thresholdBands = useMemo(() => {
           <div className="card-header">
             <div>
               <h2 className="card-title">
-                ERI History
+                ERI History <HelpTip term="eri_history" />
               </h2>
 
               <p className="card-description">
@@ -1342,6 +1375,7 @@ const thresholdBands = useMemo(() => {
 </div>
 
 <div className="eri-chart-legend">
+  <HelpTip term="states" />
   <span>
     <span className="legend-dot" style={{ background: "#22c55e" }} />
     Available
@@ -1420,7 +1454,7 @@ const thresholdBands = useMemo(() => {
         <article className="dashboard-card radar-card">
   <div className="card-header">
     <div>
-      <h2 className="card-title">ERI Sub-Metrics</h2>
+      <h2 className="card-title">ERI Sub-Metrics <HelpTip term="sub_metrics" /></h2>
       <p className="card-description">
         Health score per ERI factor (outer edge = healthy)
       </p>
@@ -1473,7 +1507,7 @@ const thresholdBands = useMemo(() => {
           <div className="card-header">
             <div>
               <h2 className="card-title">
-                Delivery Timeline
+                Delivery Timeline <HelpTip term="delivery_timeline" />
               </h2>
 
               <p className="card-description">
@@ -1567,7 +1601,7 @@ const thresholdBands = useMemo(() => {
           <div className="card-header">
             <div>
               <h2 className="card-title">
-                Policy Decision
+                Policy Decision <HelpTip term="policy_decision" />
               </h2>
 
               <p className="card-description">
@@ -1615,7 +1649,7 @@ const thresholdBands = useMemo(() => {
 
       <div className="policy-row">
         <span className="policy-label">
-          ERI score
+          ERI score <HelpTip term="eri" />
         </span>
 
         <span className="policy-value">
@@ -1625,7 +1659,7 @@ const thresholdBands = useMemo(() => {
 
       <div className="policy-row">
         <span className="policy-label">
-          Max parallelism
+          Max parallelism <HelpTip term="max_parallel" />
         </span>
 
         <span className="policy-value">
@@ -1635,7 +1669,7 @@ const thresholdBands = useMemo(() => {
 
       <div className="policy-row">
         <span className="policy-label">
-          Queue priority
+          Queue priority <HelpTip term="queue_priority" />
         </span>
 
         <span className="policy-value">
@@ -1645,7 +1679,7 @@ const thresholdBands = useMemo(() => {
 
       <div className="policy-row">
         <span className="policy-label">
-          Throughput limit
+          Throughput limit <HelpTip term="throughput_limit" />
         </span>
 
         <span className="policy-value">
@@ -1655,7 +1689,7 @@ const thresholdBands = useMemo(() => {
 
       <div className="policy-row">
         <span className="policy-label">
-          Max retries
+          Max retries <HelpTip term="max_retries" />
         </span>
 
         <span className="policy-value">
@@ -1665,7 +1699,7 @@ const thresholdBands = useMemo(() => {
 
       <div className="policy-row">
         <span className="policy-label">
-          Backoff
+          Backoff <HelpTip term="backoff" />
         </span>
 
         <span className="policy-value">
@@ -1675,7 +1709,7 @@ const thresholdBands = useMemo(() => {
 
       <div className="policy-row">
         <span className="policy-label">
-          Retry delay
+          Retry delay <HelpTip term="retry_delay" />
         </span>
 
         <span className="policy-value">
@@ -1688,7 +1722,7 @@ const thresholdBands = useMemo(() => {
 
       <div className="policy-row">
         <span className="policy-label">
-          Isolation
+          Isolation <HelpTip term="isolation" />
         </span>
 
         <span className="policy-value">
@@ -1714,7 +1748,7 @@ const thresholdBands = useMemo(() => {
           <div className="card-header">
             <div>
               <h2 className="card-title">
-                Policy Explainability
+                Policy Explainability <HelpTip term="explainability" />
               </h2>
 
               <p className="card-description">
@@ -1772,7 +1806,7 @@ const thresholdBands = useMemo(() => {
 
         <div className="explanation-item">
           <span className="explanation-label">
-            Strategy
+            Strategy <HelpTip term="strategies" />
           </span>
 
           <span className="explanation-value">
@@ -1783,7 +1817,7 @@ const thresholdBands = useMemo(() => {
 
         <div className="explanation-item">
           <span className="explanation-label">
-            Window size
+            Window size <HelpTip term="window_size" />
           </span>
 
           <span className="explanation-value">
@@ -1931,7 +1965,7 @@ const thresholdBands = useMemo(() => {
           <div className="card-header">
             <div>
               <h2 className="card-title">
-                Dead Letter Queue
+                Dead Letter Queue <HelpTip term="dlq" />
               </h2>
 
               <p className="card-description">
@@ -2003,7 +2037,7 @@ const thresholdBands = useMemo(() => {
                     <th><input type="checkbox" aria-label="Select all dead letters" checked={dlqItems.length > 0 && selectedDlqIds.length === dlqItems.length} onChange={(event) => setSelectedDlqIds(event.target.checked ? dlqItems.map((item) => item.delivery_id) : [])} /></th>
                     <th>Delivery</th>
                     <th>Endpoint</th>
-                    <th>Reason</th>
+                    <th>Reason <HelpTip term="dlq_reason" /></th>
                     <th>Attempts</th>
                     <th>Last Error</th>
                     <th>Failed At</th>
@@ -2086,7 +2120,7 @@ const thresholdBands = useMemo(() => {
         <article className="dashboard-card state-journal-card">
           <div className="card-header">
             <div>
-              <h2 className="card-title">State Transition Journal</h2>
+              <h2 className="card-title">State Transition Journal <HelpTip term="journal" /></h2>
               <p className="card-description">
                 State changes observed from the live policy stream
               </p>
@@ -2163,7 +2197,7 @@ const thresholdBands = useMemo(() => {
           <article className="dashboard-card">
             <div className="card-header">
               <div>
-                <h2 className="card-title">Multi-Endpoint Isolation</h2>
+                <h2 className="card-title">Multi-Endpoint Isolation <HelpTip term="multi_endpoint" /></h2>
                 <p className="card-description">
                   Compare the failing endpoint with a healthy neighbor sharing the same worker pool.
                 </p>
