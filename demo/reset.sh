@@ -1,5 +1,6 @@
 #!/usr/bin/env sh
 # Clean demo start: wipe all stack data, rebuild, wait for health, smoke check.
+# Brings up Demo 2 (demo/SDK_DEMO.md) too, with empty merchant inboxes.
 #
 #   sh demo/reset.sh
 #
@@ -9,20 +10,20 @@ set -eu
 cd "$(dirname "$0")/.."
 
 echo "Stopping the stack and deleting its volumes..."
-docker compose down -v
+docker compose --profile sdk-demo down -v
 
 echo "Building and starting..."
-docker compose up -d --build
+docker compose --profile sdk-demo up -d --build
 
-services="kafka postgres redis api dashboard simulator"
+services="kafka postgres redis api dashboard simulator store-acme store-bluebird"
 deadline=$(( $(date +%s) + 240 ))
 while :; do
-    status=$(docker compose ps --format '{{.Service}} {{.Status}}')
+    status=$(docker compose --profile sdk-demo ps --format '{{.Service}} {{.Status}}')
     ready=0
     for s in $services; do
         echo "$status" | grep -q "^$s .*(healthy)" && ready=$((ready + 1))
     done
-    [ "$ready" -eq 6 ] && break
+    [ "$ready" -eq 8 ] && break
     if [ "$(date +%s)" -gt "$deadline" ]; then
         echo "$status"
         echo "Services not healthy after 4 minutes" >&2
@@ -38,4 +39,4 @@ python=".venv/bin/python"
 "$python" demo/smoke_check.py
 
 echo
-echo "Ready: http://localhost:8090"
+echo "Ready: http://localhost:8090  (Demo 2 inboxes: http://localhost:8071, http://localhost:8072)"
