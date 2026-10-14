@@ -22,6 +22,7 @@ import {
 import "./App.css";
 import BenchmarkTab from "./BenchmarkTab";
 import HelpTip from "./HelpTip";
+import ScenarioLab from "./ScenarioLab";
 import { SCENARIO_GUIDE } from "./glossary";
 import {
   API_URL,
@@ -124,7 +125,17 @@ const [failureRate, setFailureRate] = useState(80);
 const [latencyMs, setLatencyMs] = useState(150);
 const [failureMode, setFailureMode] = useState("mixed");
 const [activeScenario, setActiveScenario] = useState(null);
-const [activeTab, setActiveTab] = useState("dashboard");
+// The open tab follows the URL hash (#benchmark, #multi-endpoint, #lab),
+// so a tab can be linked to and survives a reload.
+const TABS = ["dashboard", "benchmark", "multi-endpoint", "lab"];
+const [activeTab, setActiveTabState] = useState(() => {
+  const fromHash = window.location.hash.replace("#", "");
+  return TABS.includes(fromHash) ? fromHash : "dashboard";
+});
+const setActiveTab = (tab) => {
+  setActiveTabState(tab);
+  window.history.replaceState(null, "", tab === "dashboard" ? window.location.pathname : `#${tab}`);
+};
 const [dlqItems, setDlqItems] = useState([]);
 const [dlqLoading, setDlqLoading] = useState(false);
 const [dlqError, setDlqError] = useState("");
@@ -929,7 +940,7 @@ const thresholdBands = useMemo(() => {
         </div>
       </header>
 
-      {(dashboardState.policy_tier ?? 1) > 1 && (
+      {activeTab === "dashboard" && (dashboardState.policy_tier ?? 1) > 1 && (
         <section className="fallback-banner" role="status">
           <div>
             <strong>
@@ -947,7 +958,7 @@ const thresholdBands = useMemo(() => {
         </section>
       )}
 
-      {dashboardState.state === "QUARANTINED" && (
+      {activeTab === "dashboard" && dashboardState.state === "QUARANTINED" && (
         <section className="quarantine-banner" role="alert">
           <div>
             <strong>🚨 Endpoint Quarantined <HelpTip term="restore" /></strong>
@@ -967,7 +978,7 @@ const thresholdBands = useMemo(() => {
         </section>
       )}
 
-      {alerts.length > 0 && (
+      {activeTab === "dashboard" && alerts.length > 0 && (
         <aside className="alert-stack" aria-live="assertive">
           {alerts.map((alert) => (
             <div className={`alert-toast ${alert.state === "QUARANTINED" ? "quarantine" : "unstable"}`} key={alert.id}>
@@ -1022,6 +1033,13 @@ const thresholdBands = useMemo(() => {
           }}
         >
           Multi-Endpoint
+        </button>
+        <button
+          type="button"
+          className={`dashboard-tab ${activeTab === "lab" ? "active" : ""}`}
+          onClick={() => setActiveTab("lab")}
+        >
+          Scenario Lab
         </button>
       </div>
 
@@ -2259,6 +2277,7 @@ const thresholdBands = useMemo(() => {
       )}
 
       {activeTab === "benchmark" && <BenchmarkTab />}
+      {activeTab === "lab" && <ScenarioLab />}
     </main>
   );
 }
