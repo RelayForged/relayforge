@@ -268,3 +268,143 @@ def test_replay_dead_letters_omits_unset_filters():
     RelayClient(transport=httpx.MockTransport(handler)).replay_dead_letters()
 
     assert seen["body"] == {"limit": 50}
+
+
+# --------------------------------------------------------------------------
+# API key, channels, restore, receiver-side verification
+# --------------------------------------------------------------------------
+
+
+def _client(handler, **kwargs):
+    return RelayClient(
+        base_url="http://test-relay:8000", transport=httpx.MockTransport(handler), **kwargs
+    )
+
+
+def test_api_key_is_sent_on_every_request():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("X-API-Key"))
+        return httpx.Response(202, json={"event_id": "evt-1"})
+
+    with _client(handler, api_key="payflow:s3cret") as client:
+        client.publish_event("payment.captured", {"amount": 499})
+
+    assert seen == ["payflow:s3cret"]
+
+
+def test_no_api_key_header_by_default():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "X-API-Key" not in request.headers
+        return httpx.Response(202, json={"event_id": "evt-1"})
+
+    with _client(handler) as client:
+        client.publish_event("payment.captured", {"amount": 499})
+
+
+def test_publish_and_subscribe_carry_channels():
+    bodies = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        bodies.append(body)
+        if request.url.path == "/events":
+            return httpx.Response(202, json={"event_id": "evt-1"})
+        return httpx.Response(
+            201,
+            json={
+                "subscription_id": "sub-1",
+                "endpoint_id": body["endpoint_id"],
+                "event_types": body["event_types"],
+                "created_at": "2026-10-14T00:00:00Z",
+                "status": "ACTIVE",
+                "channels": body["channels"],
+            },
+        )
+
+    with _client(handler) as client:
+        subscription = client.create_subscription("ep-1", ["payment.captured"], channels=["acme"])
+        client.publish_event("payment.captured", {"amount": 499}, channels=["acme"])
+
+    assert subscription.channels == ["acme"]
+    assert [b["channels"] for b in bodies] == [["acme"], ["acme"]]
+
+
+def test_restore_endpoint():
+    from relay.sdk import RestoreResponse
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/endpoints/ep-1/restore"
+        return httpx.Response(
+            200,
+            json={"status": "RESTORE_REQUESTED", "endpoint_id": "ep-1", "target_state": "RECOVERING"},
+        )
+
+    with _client(handler) as client:
+        result = client.restore_endpoint("ep-1")
+
+    assert result == RestoreResponse(
+        status="RESTORE_REQUESTED", endpoint_id="ep-1", target_state="RECOVERING"
+    )
+
+
+def test_restore_unknown_endpoint_raises():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"detail": "Endpoint ep-x not found"})
+
+    with _client(handler) as client, pytest.raises(RelayAPIError) as raised:
+        client.restore_endpoint("ep-x")
+
+    assert raised.value.status_code == 404
+
+
+def _signed(secret="whsec", body=b'{"amount":499}', timestamp="1760400000", nonce="n-1"):
+    from relay.infrastructure.auth.signing import compute_relay_signature
+
+    return body, {
+        "X-Relay-Signature": compute_relay_signature(secret, timestamp, nonce, body),
+        "X-Relay-Timestamp": timestamp,
+        "X-Relay-Nonce": nonce,
+    }
+
+
+def test_sdk_verifier_accepts_what_the_platform_signs():
+    from relay.sdk import verify_signature
+
+    body, headers = _signed()
+
+    assert verify_signature("whsec", body, headers, now=1760400010)
+
+
+def test_sdk_verifier_reads_lowercase_headers():
+    from relay.sdk import verify_signature
+
+    body, headers = _signed()
+    lowered = {k.lower(): v for k, v in headers.items()}
+
+    assert verify_signature("whsec", body, lowered, now=1760400010)
+
+
+@pytest.mark.parametrize(
+    "secret, body_override, now",
+    [
+        ("other", None, 1760400010),            # wrong secret
+        ("whsec", b'{"amount":1}', 1760400010),  # body changed in transit
+        ("whsec", None, 1760400000 + 301),       # too old
+        ("", None, 1760400010),                  # no secret configured
+    ],
+)
+def test_sdk_verifier_rejects(secret, body_override, now):
+    from relay.sdk import verify_signature
+
+    body, headers = _signed()
+
+    assert not verify_signature(secret, body_override or body, headers, now=now)
+
+
+def test_sdk_verifier_rejects_unsigned_requests():
+    from relay.sdk import verify_signature
+
+    assert not verify_signature("whsec", b"{}", {}, now=1760400010)

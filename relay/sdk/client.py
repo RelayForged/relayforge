@@ -7,6 +7,10 @@ Usage:
     endpoint = client.register_endpoint("http://my-service/webhook", "team-a")
     sub = client.create_subscription(endpoint.endpoint_id, ["OrderCreated"])
     event = client.publish_event("OrderCreated", {"order_id": "123"})
+
+Routing to one customer among many uses channels:
+    client.create_subscription(endpoint_id, ["payment.captured"], channels=["acme"])
+    client.publish_event("payment.captured", {...}, channels=["acme"])
     print(f"Ingested event: {event.event_id}")
     client.close()
 
@@ -23,8 +27,11 @@ from relay.sdk.models import (
     EventDetail,
     EventResponse,
     ReplayResponse,
+    RestoreResponse,
     SubscriptionResponse,
 )
+
+API_KEY_HEADER = "X-API-Key"
 
 
 class RelayClient:
@@ -35,6 +42,7 @@ class RelayClient:
         base_url: str = "http://localhost:8000",
         timeout: float = 10.0,
         transport: Optional[httpx.BaseTransport] = None,
+        api_key: Optional[str] = None,
     ) -> None:
         """Initialize the RelayClient.
 
@@ -42,12 +50,15 @@ class RelayClient:
             base_url: The base URL of the Relay FastAPI service.
             timeout: Request timeout in seconds.
             transport: Optional custom HTTPX transport (useful for tests/mocking).
+            api_key: Sent as X-API-Key. Required when the platform has
+                RELAY_API_KEYS configured; a local dev stack runs without.
         """
         self.base_url = base_url.rstrip("/")
         self._http = httpx.Client(
             base_url=self.base_url,
             timeout=timeout,
             transport=transport,
+            headers={API_KEY_HEADER: api_key} if api_key else None,
         )
 
     def _request(
@@ -96,12 +107,16 @@ class RelayClient:
         self,
         event_type: str,
         payload: Dict[str, Any],
+        channels: Optional[List[str]] = None,
     ) -> EventResponse:
         """Publish an outbound business event into Relay.
 
         Args:
             event_type: Domain event classification (e.g., 'OrderCreated').
             payload: Arbitrary business payload dictionary.
+            channels: Route the event to subscriptions on these channels,
+                e.g. the merchant it belongs to. Subscriptions without
+                channels receive it regardless.
 
         Returns:
             EventResponse with the assigned event_id.
@@ -113,7 +128,11 @@ class RelayClient:
         data = self._request(
             method="POST",
             path="/events",
-            json_body={"event_type": event_type, "payload": payload},
+            json_body={
+                "event_type": event_type,
+                "payload": payload,
+                "channels": list(channels or []),
+            },
             expected_status=202,
         )
         return EventResponse(event_id=data["event_id"])
@@ -189,12 +208,15 @@ class RelayClient:
         self,
         endpoint_id: str,
         event_types: List[str],
+        channels: Optional[List[str]] = None,
     ) -> SubscriptionResponse:
         """Subscribe an endpoint to specific event types.
 
         Args:
             endpoint_id: The UUID of the destination endpoint.
             event_types: List of event type strings to deliver to this endpoint.
+            channels: Receive only events published on one of these
+                channels. Omit to receive every event of these types.
 
         Returns:
             SubscriptionResponse with subscription ID and status.
@@ -206,7 +228,11 @@ class RelayClient:
         data = self._request(
             method="POST",
             path="/subscriptions",
-            json_body={"endpoint_id": endpoint_id, "event_types": event_types},
+            json_body={
+                "endpoint_id": endpoint_id,
+                "event_types": event_types,
+                "channels": list(channels or []),
+            },
             expected_status=201,
         )
         return SubscriptionResponse(
@@ -215,6 +241,30 @@ class RelayClient:
             event_types=data["event_types"],
             created_at=str(data.get("created_at", "")),
             status=data.get("status", "ACTIVE"),
+            channels=list(data.get("channels", [])),
+        )
+
+    def restore_endpoint(self, endpoint_id: str) -> RestoreResponse:
+        """Ask the platform to lift an endpoint's quarantine.
+
+        The endpoint moves to RECOVERING and must prove itself with
+        successful deliveries before it is AVAILABLE again. Events held
+        during the quarantine are not resent by this call; follow it with
+        replay_dead_letters(endpoint_id=...).
+
+        Raises:
+            RelayAPIError: If the endpoint is unknown (404).
+            RelayConnectionError: If unable to reach the API.
+        """
+        data = self._request(
+            method="POST",
+            path=f"/endpoints/{endpoint_id}/restore",
+            expected_status=200,
+        )
+        return RestoreResponse(
+            status=data["status"],
+            endpoint_id=data["endpoint_id"],
+            target_state=data["target_state"],
         )
 
     def replay_dead_letters(

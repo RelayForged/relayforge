@@ -3,7 +3,7 @@
 These are pure dataclasses with frozen=True, free from internal Relay framework dependencies
 (e.g., Pydantic v2, SQLAlchemy, Kafka).
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
 
@@ -42,6 +42,15 @@ class SubscriptionResponse:
     event_types: List[str]
     created_at: str
     status: str
+    channels: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class RestoreResponse:
+    """Returned by restore_endpoint()."""
+    status: str
+    endpoint_id: str
+    target_state: str
 
 
 @dataclass(frozen=True)
