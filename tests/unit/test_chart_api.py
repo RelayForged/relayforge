@@ -518,3 +518,37 @@ def test_multi_endpoint_comparison_shape(client):
         assert result["healthy"]["throughput_events_per_sec"] > 0
         assert result["failing"]["endpoint_id"] != result["healthy"]["endpoint_id"]
     assert client.get("/api/chart/benchmark/multi-endpoint").json() == body
+
+
+# --------------------------------------------------------------------------
+# Scenario Lab
+# --------------------------------------------------------------------------
+
+
+def test_scenarios_lists_all_fourteen_with_their_evaluation_set(client) -> None:
+    scenarios = client.get("/api/chart/scenarios").json()["scenarios"]
+
+    assert [s["scenario_id"] for s in scenarios] == list(range(1, 15))
+    held_out = sorted(s["scenario_id"] for s in scenarios if s["evaluation_set"] == "held_out")
+    assert held_out == [3, 4, 5, 9, 10, 12, 13, 14]
+    first = scenarios[0]
+    assert first["total_events"] == sum(p["events"] for p in first["phases"])
+
+
+def test_trace_replays_the_same_run_as_the_benchmark(client) -> None:
+    trace = client.get("/api/chart/scenarios/10/trace").json()
+
+    by_strategy = {s["strategy"]: s for s in trace["strategies"]}
+    assert list(by_strategy) == ["STRATEGY_A", "STRATEGY_B", "STRATEGY_C"]
+    # Seed 42, scenario 10: the figures reported for the benchmark.
+    assert [by_strategy[k]["total_wasted_retries"] for k in by_strategy] == [930, 626, 428]
+    for strategy in by_strategy.values():
+        steps = strategy["steps"]
+        assert len(steps) == trace["scenario"]["total_events"]
+        assert sum(step["retries"] for step in steps) == strategy["total_wasted_retries"]
+        assert [step["phase"] for step in steps] == sorted(step["phase"] for step in steps)
+    assert {step["state"] for step in by_strategy["STRATEGY_A"]["steps"]} == {"AVAILABLE"}
+
+
+def test_trace_of_unknown_scenario_is_404(client) -> None:
+    assert client.get("/api/chart/scenarios/99/trace").status_code == 404

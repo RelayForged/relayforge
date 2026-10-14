@@ -175,3 +175,61 @@ class MultiEndpointResponse(BaseModel):
     """Noisy-neighbor simulation: one failing and one healthy endpoint sharing a worker pool."""
     worker_pool_size: int
     strategies: List[MultiEndpointStrategyResult] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------------
+# Scenario Lab: step-by-step playback of one benchmark scenario
+# --------------------------------------------------------------------------
+
+
+class ScenarioPhaseInfo(BaseModel):
+    """One phase of a scenario's fault script, in the simulator's own terms."""
+    description: str
+    events: int
+    success_rate: float
+    latency_ms: float
+    timed_out_rate: float
+    http_5xx_rate: float
+    manual_restore: bool
+
+
+class ScenarioInfo(BaseModel):
+    scenario_id: int
+    name: str
+    description: str
+    # "held_out": used only for evaluation. "tuning": used to calibrate the
+    # ERI weights, so results on it are not reported as evidence.
+    evaluation_set: str
+    total_events: int
+    phases: List[ScenarioPhaseInfo] = Field(default_factory=list)
+
+
+class ScenarioListResponse(BaseModel):
+    scenarios: List[ScenarioInfo] = Field(default_factory=list)
+
+
+class TraceStep(BaseModel):
+    """One simulated event, as the strategy handled it."""
+    phase: int
+    succeeded: bool
+    eri: float
+    state: str
+    retries: int
+    delay_seconds: float
+    max_parallel: int
+
+
+class StrategyTrace(BaseModel):
+    strategy: str
+    steps: List[TraceStep] = Field(default_factory=list)
+    delivery_success_rate: float
+    total_wasted_retries: int
+    total_delay_seconds: float
+    quarantine_count: int
+
+
+class ScenarioTraceResponse(BaseModel):
+    """Every event of one scenario under each strategy, for animated playback."""
+    scenario: ScenarioInfo
+    seed: int
+    strategies: List[StrategyTrace] = Field(default_factory=list)

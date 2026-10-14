@@ -27,7 +27,13 @@ from relay.api.chart.schemas import (
     MultiEndpointResponse,
     MultiEndpointStrategyResult,
     PolicyDecisionResponse,
+    ScenarioInfo,
+    ScenarioListResponse,
+    ScenarioPhaseInfo,
+    ScenarioTraceResponse,
     StrategyComparison,
+    StrategyTrace,
+    TraceStep,
 )
 from relay.api.chart.stores import BenchmarkRun, benchmark_store, state_store
 
@@ -420,3 +426,102 @@ async def list_dead_letters(
             for item in dead_letters
         ]
     )
+
+
+# --------------------------------------------------------------------------
+# Scenario Lab
+# --------------------------------------------------------------------------
+
+
+def _scenario_info(scenario) -> ScenarioInfo:
+    from benchmark.scenarios import EVALUATION_SCENARIO_IDS
+
+    return ScenarioInfo(
+        scenario_id=scenario.scenario_id,
+        name=scenario.name,
+        description=scenario.description,
+        evaluation_set="held_out" if scenario.scenario_id in EVALUATION_SCENARIO_IDS else "tuning",
+        total_events=sum(phase.duration_events for phase in scenario.phases),
+        phases=[
+            ScenarioPhaseInfo(
+                description=phase.description,
+                events=phase.duration_events,
+                success_rate=phase.success_rate,
+                latency_ms=phase.latency_ms,
+                timed_out_rate=phase.timed_out_rate,
+                http_5xx_rate=phase.http_5xx_rate,
+                manual_restore=phase.manual_restore,
+            )
+            for phase in scenario.phases
+        ],
+    )
+
+
+@router.get(
+    "/scenarios",
+    response_model=ScenarioListResponse,
+    summary="All 14 benchmark scenarios, with their fault scripts",
+)
+async def list_scenarios() -> ScenarioListResponse:
+    from benchmark.scenarios import get_all_scenarios
+
+    return ScenarioListResponse(scenarios=[_scenario_info(s) for s in get_all_scenarios()])
+
+
+def _trace_scenario(scenario_id: int, seed: int) -> ScenarioTraceResponse:
+    from benchmark.metrics import summarise
+    from benchmark.runner import BenchmarkRunner, DeliveryStrategyConfig
+    from benchmark.scenarios import get_scenario
+
+    scenario = get_scenario(scenario_id)
+    # Which phase each event belongs to: phases run in order, back to back.
+    phase_of = [
+        index for index, phase in enumerate(scenario.phases) for _ in range(phase.duration_events)
+    ]
+    traces = []
+    for strategy in BENCHMARK_STRATEGIES:
+        result = BenchmarkRunner(DeliveryStrategyConfig(strategy=strategy), random_seed=seed).run(scenario)
+        summary = summarise(result)
+        traces.append(
+            StrategyTrace(
+                strategy=strategy,
+                steps=[
+                    TraceStep(
+                        phase=phase_of[min(i, len(phase_of) - 1)],
+                        succeeded=attempt.succeeded,
+                        eri=round(attempt.eri_score, 2),
+                        state=attempt.final_state,
+                        retries=attempt.retry_count,
+                        delay_seconds=round(attempt.delay_seconds, 2),
+                        max_parallel=attempt.max_parallel,
+                    )
+                    for i, attempt in enumerate(result.attempts)
+                ],
+                delivery_success_rate=summary["delivery_success_rate"],
+                total_wasted_retries=summary["total_wasted_retries"],
+                total_delay_seconds=summary["total_delay_seconds"],
+                quarantine_count=summary["quarantine_count"],
+            )
+        )
+    return ScenarioTraceResponse(scenario=_scenario_info(scenario), seed=seed, strategies=traces)
+
+
+@router.get(
+    "/scenarios/{scenario_id}/trace",
+    response_model=ScenarioTraceResponse,
+    summary="Every event of one scenario under Strategies A, B and C, for playback",
+)
+async def trace_scenario(
+    scenario_id: int,
+    seed: int = Query(default=42, description="Benchmark seed; 42 matches the reported results"),
+) -> ScenarioTraceResponse:
+    """
+    The same deterministic simulation as POST /benchmark/run, but returning
+    each event instead of only totals, so the dashboard can replay it. Read
+    only: nothing is stored.
+    """
+    from benchmark.scenarios import get_all_scenarios
+
+    if scenario_id not in {s.scenario_id for s in get_all_scenarios()}:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Unknown scenario {scenario_id}")
+    return await asyncio.to_thread(_trace_scenario, scenario_id, seed)
