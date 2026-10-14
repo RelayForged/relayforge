@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Bar,
-  BarChart,
   CartesianGrid,
   ComposedChart,
   Line,
@@ -10,7 +8,6 @@ import {
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
-  Legend,
   XAxis,
   YAxis,
   Radar,
@@ -22,6 +19,7 @@ import {
 import "./App.css";
 import BenchmarkTab from "./BenchmarkTab";
 import HelpTip from "./HelpTip";
+import NoisyNeighbour from "./NoisyNeighbour";
 import ScenarioLab from "./ScenarioLab";
 import { SCENARIO_GUIDE } from "./glossary";
 import {
@@ -142,9 +140,6 @@ const [dlqError, setDlqError] = useState("");
 const [replayingDeliveryId, setReplayingDeliveryId] = useState(null);
 const [stateTransitions, setStateTransitions] = useState([]);
 const [selectedDlqIds, setSelectedDlqIds] = useState([]);
-const [multiEndpointData, setMultiEndpointData] = useState(null);
-const [multiEndpointLoading, setMultiEndpointLoading] = useState(false);
-const [multiEndpointError, setMultiEndpointError] = useState("");
 const [alerts, setAlerts] = useState([]);
 const [signatures, setSignatures] = useState({});
 
@@ -772,43 +767,6 @@ useEffect(() => {
   };
 }, [dashboardState.source]);
 
-  const loadMultiEndpointData = async () => {
-    setMultiEndpointLoading(true);
-    setMultiEndpointError("");
-    try {
-      const response = await fetch(`${DASHBOARD_URL}/api/chart/benchmark/multi-endpoint`);
-      const payload = await response.json();
-      if (!response.ok) {
-        const detail =
-          typeof payload.detail === "string"
-            ? payload.detail
-            : JSON.stringify(payload.detail ?? payload);
-        throw new Error(detail);
-      }
-      setMultiEndpointData(payload);
-    } catch (error) {
-      console.error("Unable to load multi-endpoint benchmark:", error);
-      setMultiEndpointError(
-        error instanceof Error
-          ? error.message
-          : "Unable to load multi-endpoint comparison.",
-      );
-    } finally {
-      setMultiEndpointLoading(false);
-    }
-  };
-
-  const multiEndpointChartData = useMemo(() => {
-    if (!multiEndpointData?.strategies) {
-      return [];
-    }
-    return multiEndpointData.strategies.map((result) => ({
-      strategy: result.strategy.replace("STRATEGY_", "Strategy "),
-      "Failing endpoint": Number(result.failing?.throughput_events_per_sec ?? 0),
-      "Healthy neighbor": Number(result.healthy?.throughput_events_per_sec ?? 0),
-    }));
-  }, [multiEndpointData]);
-
   const chartData = useMemo(() => {
   const history = dashboardState.eri_history ?? [];
 
@@ -1071,12 +1029,7 @@ const thresholdBands = useMemo(() => {
           className={`dashboard-tab ${
             activeTab === "multi-endpoint" ? "active" : ""
           }`}
-          onClick={() => {
-            setActiveTab("multi-endpoint");
-            if (!multiEndpointData && !multiEndpointLoading) {
-              void loadMultiEndpointData();
-            }
-          }}
+          onClick={() => setActiveTab("multi-endpoint")}
         >
           Multi-Endpoint
         </button>
@@ -2282,71 +2235,7 @@ const thresholdBands = useMemo(() => {
       </section>
       )}
 
-      {activeTab === "multi-endpoint" && (
-        <section className="multi-endpoint-page">
-          <article className="dashboard-card">
-            <div className="card-header">
-              <div>
-                <h2 className="card-title">Multi-Endpoint Isolation <HelpTip term="multi_endpoint" /></h2>
-                <p className="card-description">
-                  Compare the failing endpoint with a healthy neighbor sharing the same worker pool.
-                </p>
-              </div>
-              <button
-                type="button"
-                className="fault-apply"
-                onClick={() => void loadMultiEndpointData()}
-                disabled={multiEndpointLoading}
-              >
-                {multiEndpointLoading ? "Loading..." : "Refresh comparison"}
-              </button>
-            </div>
-
-            {multiEndpointError && (
-              <div className="dlq-error" role="alert">{multiEndpointError}</div>
-            )}
-
-            {multiEndpointData && (
-              <div className="multi-endpoint-summary">
-                <span>Worker pool: <strong>{multiEndpointData.worker_pool_size}</strong></span>
-                <span>Strategies: <strong>{multiEndpointData.strategies?.length ?? 0}</strong></span>
-              </div>
-            )}
-
-            {!multiEndpointData && !multiEndpointLoading ? (
-              <div className="chart-empty">Choose this tab to load the isolation comparison.</div>
-            ) : multiEndpointData ? (
-              <>
-                <div className="multi-endpoint-chart">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={multiEndpointChartData}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="strategy" />
-                      <YAxis label={{ value: "Throughput (events/s)", angle: -90, position: "insideLeft" }} />
-                      <Tooltip />
-                      <Legend />
-                      <Bar dataKey="Failing endpoint" fill="#ef4444" />
-                      <Bar dataKey="Healthy neighbor" fill="#22c55e" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-                <div className="multi-endpoint-cards">
-                  {(multiEndpointData.strategies ?? []).map((result) => (
-                    <div className="multi-endpoint-card" key={result.strategy}>
-                      <strong>{result.strategy}</strong>
-                      <span className={result.quarantine_triggered ? "isolation-badge active" : "isolation-badge"}>
-                        {result.quarantine_triggered ? "Quarantine triggered" : "No quarantine"}
-                      </span>
-                      <span>Healthy throughput: {Number(result.healthy?.throughput_events_per_sec ?? 0).toFixed(2)} events/s</span>
-                      <span>Healthy queue wait: {Number(result.healthy?.avg_queue_wait_ms ?? 0).toFixed(1)} ms</span>
-                    </div>
-                  ))}
-                </div>
-              </>
-            ) : null}
-          </article>
-        </section>
-      )}
+      {activeTab === "multi-endpoint" && <NoisyNeighbour />}
 
       {activeTab === "benchmark" && <BenchmarkTab />}
       {activeTab === "lab" && <ScenarioLab />}

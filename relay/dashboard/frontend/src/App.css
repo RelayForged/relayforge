@@ -1471,3 +1471,134 @@
   color: #334155;
   font-size: 0.85rem;
 }
+
+/* Noisy neighbour (NoisyNeighbour.jsx) */
+.nn-page {
+  display: grid;
+  gap: 20px;
+}
+
+.nn-explainer {
+  max-width: 920px;
+  color: #334155;
+  line-height: 1.55;
+}
+
+.nn-explainer ul {
+  padding-left: 0;
+  list-style: none;
+}
+
+.nn-explainer li {
+  margin: 6px 0;
+}
+
+.nn-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.nn-column {
+  border-top: 4px solid;
+}
+
+.nn-column h3 {
+  margin: 0 0 8px;
+}
+
+.nn-status {
+  min-height: 2.6em;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f8fafc;
+  font-size: 0.82rem;
+}
+
+.nn-status.isolated {
+  background: rgba(239, 68, 68, 0.08);
+  color: #991b1b;
+  font-weight: 600;
+}
+
+.nn-label {
+  margin: 14px 0 6px;
+  color: #64748b;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.nn-row {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+}
+
+.nn-who {
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.nn-queue {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
+}
+
+.nn-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+}
+
+.nn-dot.failing { background: #ef4444; }
+.nn-dot.healthy { background: #22c55e; }
+
+.nn-more,
+.nn-empty {
+  color: #64748b;
+  font-size: 0.75rem;
+}
+
+.nn-workers {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+}
+
+.nn-worker {
+  padding: 10px 8px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  color: #94a3b8;
+  font-size: 0.78rem;
+  text-align: center;
+}
+
+.nn-worker.failing {
+  border: 1px solid #ef4444;
+  background: rgba(239, 68, 68, 0.12);
+  color: #991b1b;
+}
+
+.nn-worker.healthy {
+  border: 1px solid #22c55e;
+  background: rgba(34, 197, 94, 0.12);
+  color: #166534;
+}
+
+.nn-stats {
+  margin-top: 14px;
+}
+
+.nn-done {
+  margin: 10px 0 0;
+  color: #166534;
+  font-size: 0.82rem;
+}
