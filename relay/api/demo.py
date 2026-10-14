@@ -108,8 +108,8 @@ SCENARIOS: Dict[str, ScenarioPreset] = {
         ScenarioPreset(
             id="instability",
             label="Instability",
-            simulator=SimulatorSettings(mode="http_error", rate=0.75),
-            expects="Most deliveries return HTTP 500; backoff grows.",
+            simulator=SimulatorSettings(mode="http_error", rate=0.5),
+            expects="Half the deliveries return HTTP 500; endpoint goes UNSTABLE and backs off.",
         ),
         ScenarioPreset(
             id="full_outage",

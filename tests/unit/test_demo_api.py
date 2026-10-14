@@ -125,7 +125,7 @@ def test_activate_configures_simulator_and_starts_publishing(harness) -> None:
     body = res.json()
     assert body["active_scenario"] == "instability"
     assert body["publishing"] is True
-    assert body["simulator"] == {"mode": "http_error", "rate": 0.75, "latency_ms": 0}
+    assert body["simulator"] == {"mode": "http_error", "rate": 0.5, "latency_ms": 0}
     assert harness.calls["simulator"] == [body["simulator"]]
 
     endpoint = harness.endpoints.endpoints[0]
