@@ -86,6 +86,8 @@ payflow recover acme
 
 Say: *"No merchant ever misses a payment notification, even through their own outage, and nobody had to reconcile by hand."*
 
+**Variation: no human at all.** Skip `recover` and keep taking payments (`payflow pay acme 5 --count 30 --interval 1`). After the 30 s quarantine hold, Relay probes Acme by itself. Once 25 probes succeed, Acme is AVAILABLE again and the held payments are resent automatically (ADR 0027). If Acme is still down, the hold doubles (30 s, 60 s, … up to 4 minutes).
+
 ### 5. Optional: look one up
 
 ```powershell

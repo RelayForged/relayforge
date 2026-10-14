@@ -11,6 +11,7 @@ import {
 } from "recharts";
 
 import { DASHBOARD_URL } from "./config";
+import HelpTip from "./HelpTip";
 
 const SCENARIO_IDS = [3, 4, 5, 9, 10, 12, 13, 14];
 
@@ -439,10 +440,10 @@ export default function BenchmarkTab() {
       `}</style>
 
       <article className="benchmark-card">
-        <h2>Strategy Benchmark</h2>
+        <h2>Strategy Benchmark <HelpTip term="benchmark" /> <HelpTip term="strategies" /></h2>
         <p className="benchmark-description">
           Compare static retries, adaptive retries, and the full AEDE policy
-          on the eight held-out evaluation scenarios.
+          on the eight held-out evaluation scenarios <HelpTip term="held_out" />.
         </p>
 
         <div className="benchmark-actions">
@@ -638,8 +639,8 @@ export default function BenchmarkTab() {
                 <tr>
                   <th>Scenario</th>
                   <th>Strategy</th>
-                  <th>Success rate</th>
-                  <th>Wasted retries</th>
+                  <th>Success rate <HelpTip term="success_rate" /></th>
+                  <th>Wasted retries <HelpTip term="wasted_retries" /></th>
                   <th>Avg. retries</th>
                 </tr>
               </thead>

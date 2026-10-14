@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Bar,
-  BarChart,
   CartesianGrid,
   ComposedChart,
   Line,
@@ -10,7 +8,6 @@ import {
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
-  Legend,
   XAxis,
   YAxis,
   Radar,
@@ -21,6 +18,10 @@ import {
 } from "recharts";
 import "./App.css";
 import BenchmarkTab from "./BenchmarkTab";
+import HelpTip from "./HelpTip";
+import NoisyNeighbour from "./NoisyNeighbour";
+import ScenarioLab from "./ScenarioLab";
+import { SCENARIO_GUIDE } from "./glossary";
 import {
   API_URL,
   DASHBOARD_URL,
@@ -122,18 +123,41 @@ const [failureRate, setFailureRate] = useState(80);
 const [latencyMs, setLatencyMs] = useState(150);
 const [failureMode, setFailureMode] = useState("mixed");
 const [activeScenario, setActiveScenario] = useState(null);
-const [activeTab, setActiveTab] = useState("dashboard");
+// The open tab follows the URL hash (#benchmark, #multi-endpoint, #lab),
+// so a tab can be linked to and survives a reload.
+const TABS = ["dashboard", "benchmark", "multi-endpoint", "lab"];
+const [activeTab, setActiveTabState] = useState(() => {
+  const fromHash = window.location.hash.replace("#", "");
+  return TABS.includes(fromHash) ? fromHash : "dashboard";
+});
+const setActiveTab = (tab) => {
+  setActiveTabState(tab);
+  window.history.replaceState(null, "", tab === "dashboard" ? window.location.pathname : `#${tab}`);
+};
 const [dlqItems, setDlqItems] = useState([]);
 const [dlqLoading, setDlqLoading] = useState(false);
 const [dlqError, setDlqError] = useState("");
 const [replayingDeliveryId, setReplayingDeliveryId] = useState(null);
 const [stateTransitions, setStateTransitions] = useState([]);
 const [selectedDlqIds, setSelectedDlqIds] = useState([]);
-const [multiEndpointData, setMultiEndpointData] = useState(null);
-const [multiEndpointLoading, setMultiEndpointLoading] = useState(false);
-const [multiEndpointError, setMultiEndpointError] = useState("");
 const [alerts, setAlerts] = useState([]);
 const [signatures, setSignatures] = useState({});
+
+// Alerts close themselves after a while; the journal keeps the history.
+const ALERT_LIFETIME_MS = 15000;
+useEffect(() => {
+  if (!alerts.length) {
+    return undefined;
+  }
+  const timer = window.setInterval(() => {
+    const cutoff = Date.now() - ALERT_LIFETIME_MS;
+    setAlerts((previous) => {
+      const kept = previous.filter((item) => (item.createdAt ?? Date.now()) > cutoff);
+      return kept.length === previous.length ? previous : kept;
+    });
+  }, 1000);
+  return () => window.clearInterval(timer);
+}, [alerts.length]);
 const [faultError, setFaultError] = useState("");
 const [aedeAvailable, setAedeAvailable] = useState(true);
 const [aedeSwitchError, setAedeSwitchError] = useState("");
@@ -212,6 +236,7 @@ stateAfter: explanation.state_after,
                 const explanation = message.policy_explanation ?? {};
                 const nextAlert = {
                   id: `${nextState}-${explanation.record_id ?? Date.now()}`,
+                  createdAt: Date.now(),
                   state: nextState,
                   endpointId: message.endpoint_id ?? "Current endpoint",
                   eri: formatEri(message.eri),
@@ -309,6 +334,47 @@ stateAfter: explanation.state_after,
       setAedeSwitchError(
         error instanceof Error ? error.message : "AEDE switch failed.",
       );
+    }
+  };
+
+  const [restoreNotice, setRestoreNotice] = useState("");
+
+  const restoreEndpoint = async () => {
+    const endpointId = dashboardState.endpoint_id;
+    if (!endpointId) {
+      return;
+    }
+    setRestoreNotice("");
+    try {
+      const response = await fetch(
+        `${API_URL}/endpoints/${encodeURIComponent(endpointId)}/restore`,
+        { method: "POST" },
+      );
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(
+          typeof payload.detail === "string"
+            ? payload.detail
+            : JSON.stringify(payload.detail ?? payload),
+        );
+      }
+      setRestoreNotice(
+        "Restore requested: the endpoint is on probation (RECOVERING). Replay held events from the dead letter queue.",
+      );
+    } catch (error) {
+      setAlerts((previousAlerts) => [
+        {
+          id: `restore-${Date.now()}`,
+          createdAt: Date.now(),
+          state: "RESTORE_ERROR",
+          endpointId,
+          eri: formatEri(dashboardState.eri),
+          successRate: "--",
+          title: "Restore request failed",
+          message: error instanceof Error ? error.message : "Unable to restore endpoint.",
+        },
+        ...previousAlerts,
+      ].slice(0, 5));
     }
   };
 
@@ -701,43 +767,6 @@ useEffect(() => {
   };
 }, [dashboardState.source]);
 
-  const loadMultiEndpointData = async () => {
-    setMultiEndpointLoading(true);
-    setMultiEndpointError("");
-    try {
-      const response = await fetch(`${DASHBOARD_URL}/api/chart/benchmark/multi-endpoint`);
-      const payload = await response.json();
-      if (!response.ok) {
-        const detail =
-          typeof payload.detail === "string"
-            ? payload.detail
-            : JSON.stringify(payload.detail ?? payload);
-        throw new Error(detail);
-      }
-      setMultiEndpointData(payload);
-    } catch (error) {
-      console.error("Unable to load multi-endpoint benchmark:", error);
-      setMultiEndpointError(
-        error instanceof Error
-          ? error.message
-          : "Unable to load multi-endpoint comparison.",
-      );
-    } finally {
-      setMultiEndpointLoading(false);
-    }
-  };
-
-  const multiEndpointChartData = useMemo(() => {
-    if (!multiEndpointData?.strategies) {
-      return [];
-    }
-    return multiEndpointData.strategies.map((result) => ({
-      strategy: result.strategy.replace("STRATEGY_", "Strategy "),
-      "Failing endpoint": Number(result.failing?.throughput_events_per_sec ?? 0),
-      "Healthy neighbor": Number(result.healthy?.throughput_events_per_sec ?? 0),
-    }));
-  }, [multiEndpointData]);
-
   const chartData = useMemo(() => {
   const history = dashboardState.eri_history ?? [];
 
@@ -766,6 +795,21 @@ useEffect(() => {
     };
   });
 }, [dashboardState.eri_history]);
+
+const requestRhythm = useMemo(() => {
+  const times = (dashboardState.delivery_events ?? [])
+    .map((event) => new Date(event.timestamp).getTime())
+    .filter(Number.isFinite);
+  if (times.length < 2) {
+    return null;
+  }
+  const gaps = times.slice(0, -1).map((time, i) => Math.max(0, (time - times[i + 1]) / 1000));
+  return {
+    count: times.length,
+    average: gaps.reduce((sum, gap) => sum + gap, 0) / gaps.length,
+    longest: Math.max(...gaps),
+  };
+}, [dashboardState.delivery_events]);
 
 const radarData = useMemo(() => {
   const scores = dashboardState.eri_sub_scores ?? {};
@@ -887,13 +931,14 @@ const thresholdBands = useMemo(() => {
         </div>
       </header>
 
-      {(dashboardState.policy_tier ?? 1) > 1 && (
+      {activeTab === "dashboard" && (dashboardState.policy_tier ?? 1) > 1 && (
         <section className="fallback-banner" role="status">
           <div>
             <strong>
               {dashboardState.policy_tier === 2
                 ? "⚠ Policy fallback: Tier 2 — cached policy"
-                : "⚠ Policy fallback: Tier 3 — static defaults"}
+                : "⚠ Policy fallback: Tier 3 — static defaults"}{" "}
+              <HelpTip term="policy_tier" />
             </strong>
             <span>
               {dashboardState.policy_tier === 2
@@ -904,60 +949,39 @@ const thresholdBands = useMemo(() => {
         </section>
       )}
 
-      {dashboardState.state === "QUARANTINED" && (
+      {activeTab === "dashboard" && dashboardState.state === "QUARANTINED" && (
         <section className="quarantine-banner" role="alert">
           <div>
-            <strong>🚨 Endpoint Quarantined</strong>
+            <strong>🚨 Endpoint Quarantined <HelpTip term="restore" /></strong>
             <span>
               {dashboardState.endpoint_id ?? "Current endpoint"} is isolated.
-              New deliveries are paused until the endpoint is restored.
+              Relay has stopped sending to it and is holding its events. It will re-check the
+              endpoint by itself after its quarantine hold; if you have fixed it (for example
+              ▶ Normal), bring it back now.
             </span>
           </div>
           <button
             type="button"
             className="restore-button"
-            onClick={async () => {
-              const endpointId = dashboardState.endpoint_id;
-              if (!endpointId) {
-                return;
-              }
-              try {
-                const response = await fetch(`${API_URL}/endpoints/${encodeURIComponent(endpointId)}/restore`, {
-                  method: "POST",
-                });
-                const payload = await response.json();
-                if (!response.ok) {
-                  throw new Error(
-                    typeof payload.detail === "string"
-                      ? payload.detail
-                      : JSON.stringify(payload.detail ?? payload),
-                  );
-                }
-              } catch (error) {
-                setAlerts((previousAlerts) => [
-                  {
-                    id: `restore-${Date.now()}`,
-                    state: "RESTORE_ERROR",
-                    endpointId,
-                    eri: formatEri(dashboardState.eri),
-                    successRate: "--",
-                    title: "Restore request failed",
-                    message: error instanceof Error ? error.message : "Unable to restore endpoint.",
-                  },
-                  ...previousAlerts,
-                ].slice(0, 5));
-              }
-            }}
+            onClick={() => void restoreEndpoint()}
           >
-            Restore Endpoint
+            Bring endpoint back
           </button>
         </section>
       )}
 
-      {alerts.length > 0 && (
+      {activeTab === "dashboard" && alerts.length > 0 && (
         <aside className="alert-stack" aria-live="assertive">
           {alerts.map((alert) => (
             <div className={`alert-toast ${alert.state === "QUARANTINED" ? "quarantine" : "unstable"}`} key={alert.id}>
+              <button
+                type="button"
+                className="alert-toast-close"
+                aria-label="Close"
+                onClick={() => setAlerts((previous) => previous.filter((item) => item.id !== alert.id))}
+              >
+                ×
+              </button>
               <div className="alert-toast-title">{alert.title}</div>
               <div>Endpoint {alert.endpointId} {alert.state === "QUARANTINED" ? "has been quarantined." : "is unstable."}</div>
               <div>ERI: {alert.eri} | Success rate: {alert.successRate}</div>
@@ -972,6 +996,11 @@ const thresholdBands = useMemo(() => {
               </div>
             </div>
           ))}
+          {alerts.length > 1 && (
+            <button type="button" className="alert-dismiss-all" onClick={() => setAlerts([])}>
+              Dismiss all
+            </button>
+          )}
         </aside>
       )}
 
@@ -1001,14 +1030,16 @@ const thresholdBands = useMemo(() => {
           className={`dashboard-tab ${
             activeTab === "multi-endpoint" ? "active" : ""
           }`}
-          onClick={() => {
-            setActiveTab("multi-endpoint");
-            if (!multiEndpointData && !multiEndpointLoading) {
-              void loadMultiEndpointData();
-            }
-          }}
+          onClick={() => setActiveTab("multi-endpoint")}
         >
           Multi-Endpoint
+        </button>
+        <button
+          type="button"
+          className={`dashboard-tab ${activeTab === "lab" ? "active" : ""}`}
+          onClick={() => setActiveTab("lab")}
+        >
+          Scenario Lab
         </button>
       </div>
 
@@ -1018,7 +1049,7 @@ const thresholdBands = useMemo(() => {
           <div className="card-header">
             <div>
               <h2 className="card-title">
-                Endpoint State
+                Endpoint State <HelpTip term="endpoint_state" />
               </h2>
 
               <p className="card-description">
@@ -1033,14 +1064,26 @@ const thresholdBands = useMemo(() => {
             >
               {dashboardState.state}
             </span>
+            {dashboardState.state === "QUARANTINED" && (
+              <button
+                type="button"
+                className="restore-button state-restore"
+                onClick={() => void restoreEndpoint()}
+              >
+                Bring endpoint back
+              </button>
+            )}
           </div>
+          {restoreNotice && dashboardState.state !== "QUARANTINED" && (
+            <p className="restore-notice">{restoreNotice}</p>
+          )}
         </article>
 
         <article className="dashboard-card eri-card">
           <div className="card-header">
             <div>
               <h2 className="card-title">
-                Endpoint Reliability Index
+                Endpoint Reliability Index <HelpTip term="eri" />
               </h2>
 
               <p className="card-description">
@@ -1064,7 +1107,7 @@ const thresholdBands = useMemo(() => {
           <div className="card-header">
             <div>
               <h2 className="card-title">
-                Live Stream
+                Live Stream <HelpTip term="live_stream" />
               </h2>
 
               <p className="card-description">
@@ -1086,7 +1129,7 @@ const thresholdBands = useMemo(() => {
   <div className="card-header">
     <div>
       <h2 className="card-title">
-        Fault Injection
+        Fault Injection <HelpTip term="fault_injection" />
       </h2>
 
       <p className="card-description">
@@ -1176,7 +1219,7 @@ const thresholdBands = useMemo(() => {
     {faultError && <div className="dlq-error">{faultError}</div>}
 
 <div className="scenario-presets">
-  <p className="fault-label">Scenario presets</p>
+  <p className="fault-label">Scenario presets <HelpTip term="scenario_presets" /></p>
 
   <div className="scenario-preset-buttons">
     {scenarioPresets.map((preset) => (
@@ -1187,6 +1230,7 @@ const thresholdBands = useMemo(() => {
     activeScenario === preset.id ? "active" : ""
   }`}
   onClick={() => applyScenarioPreset(preset)}
+  title={SCENARIO_GUIDE[preset.id]?.story}
 >
   {preset.label}
 </button>
@@ -1196,7 +1240,7 @@ const thresholdBands = useMemo(() => {
   {dashboardState.source === "live" && (
     <div className="aede-switch">
       <span>
-        Policy engine (AEDE):{" "}
+        Policy engine (AEDE) <HelpTip term="aede_outage" />:{" "}
         <strong>{aedeAvailable ? "available" : "simulated outage"}</strong>
       </span>
       <button
@@ -1218,6 +1262,13 @@ const thresholdBands = useMemo(() => {
       )?.label ?? "None selected"}
     </strong>
   </p>
+
+  {activeScenario && SCENARIO_GUIDE[activeScenario] && (
+    <div className="scenario-guide">
+      <p><strong>What's happening:</strong> {SCENARIO_GUIDE[activeScenario].story}</p>
+      <p><strong>Watch for:</strong> {SCENARIO_GUIDE[activeScenario].watch}</p>
+    </div>
+  )}
 </div>
   </div>
 </article>
@@ -1226,7 +1277,7 @@ const thresholdBands = useMemo(() => {
           <div className="card-header">
             <div>
               <h2 className="card-title">
-                ERI History
+                ERI History <HelpTip term="eri_history" />
               </h2>
 
               <p className="card-description">
@@ -1342,6 +1393,7 @@ const thresholdBands = useMemo(() => {
 </div>
 
 <div className="eri-chart-legend">
+  <HelpTip term="states" />
   <span>
     <span className="legend-dot" style={{ background: "#22c55e" }} />
     Available
@@ -1420,7 +1472,7 @@ const thresholdBands = useMemo(() => {
         <article className="dashboard-card radar-card">
   <div className="card-header">
     <div>
-      <h2 className="card-title">ERI Sub-Metrics</h2>
+      <h2 className="card-title">ERI Sub-Metrics <HelpTip term="sub_metrics" /></h2>
       <p className="card-description">
         Health score per ERI factor (outer edge = healthy)
       </p>
@@ -1473,12 +1525,20 @@ const thresholdBands = useMemo(() => {
           <div className="card-header">
             <div>
               <h2 className="card-title">
-                Delivery Timeline
+                Delivery Timeline <HelpTip term="delivery_timeline" />
               </h2>
 
               <p className="card-description">
-                Recent delivery activity
+                Recent delivery activity, newest first. The grey badge is the time since the
+                previous attempt; amber means a long wait (backoff or isolation).
               </p>
+              {requestRhythm && (
+                <p className="timeline-rhythm">
+                  Last {requestRhythm.count} attempts: one every{" "}
+                  <b>{requestRhythm.average.toFixed(1)} s</b> on average, longest gap{" "}
+                  <b>{requestRhythm.longest.toFixed(1)} s</b>
+                </p>
+              )}
             </div>
           </div>
 
@@ -1488,7 +1548,7 @@ const thresholdBands = useMemo(() => {
                 No delivery events available.
               </div>
             ) : (
-              dashboardState.delivery_events.map((event) => (
+              dashboardState.delivery_events.map((event, index, events) => (
   <div
     className="timeline-event"
     key={event.id}
@@ -1497,6 +1557,24 @@ const thresholdBands = useMemo(() => {
       <span className="timeline-time">
         {formatTime(event.timestamp)}
       </span>
+      {(() => {
+        // Rows are newest first, so the previous request is the next row.
+        const older = events[index + 1];
+        const gap = older
+          ? (new Date(event.timestamp) - new Date(older.timestamp)) / 1000
+          : null;
+        if (gap == null || !Number.isFinite(gap)) {
+          return null;
+        }
+        return (
+          <span
+            className={`timeline-gap ${gap >= 5 ? "long" : ""}`}
+            title="Time since the previous delivery attempt to this endpoint"
+          >
+            +{gap < 10 ? gap.toFixed(1) : Math.round(gap)} s
+          </span>
+        );
+      })()}
 
       <span
         className={`timeline-status ${
@@ -1567,7 +1645,7 @@ const thresholdBands = useMemo(() => {
           <div className="card-header">
             <div>
               <h2 className="card-title">
-                Policy Decision
+                Policy Decision <HelpTip term="policy_decision" />
               </h2>
 
               <p className="card-description">
@@ -1615,7 +1693,7 @@ const thresholdBands = useMemo(() => {
 
       <div className="policy-row">
         <span className="policy-label">
-          ERI score
+          ERI score <HelpTip term="eri" />
         </span>
 
         <span className="policy-value">
@@ -1625,7 +1703,7 @@ const thresholdBands = useMemo(() => {
 
       <div className="policy-row">
         <span className="policy-label">
-          Max parallelism
+          Max parallelism <HelpTip term="max_parallel" />
         </span>
 
         <span className="policy-value">
@@ -1635,7 +1713,7 @@ const thresholdBands = useMemo(() => {
 
       <div className="policy-row">
         <span className="policy-label">
-          Queue priority
+          Queue priority <HelpTip term="queue_priority" />
         </span>
 
         <span className="policy-value">
@@ -1645,7 +1723,7 @@ const thresholdBands = useMemo(() => {
 
       <div className="policy-row">
         <span className="policy-label">
-          Throughput limit
+          Throughput limit <HelpTip term="throughput_limit" />
         </span>
 
         <span className="policy-value">
@@ -1655,7 +1733,7 @@ const thresholdBands = useMemo(() => {
 
       <div className="policy-row">
         <span className="policy-label">
-          Max retries
+          Max retries <HelpTip term="max_retries" />
         </span>
 
         <span className="policy-value">
@@ -1665,7 +1743,7 @@ const thresholdBands = useMemo(() => {
 
       <div className="policy-row">
         <span className="policy-label">
-          Backoff
+          Backoff <HelpTip term="backoff" />
         </span>
 
         <span className="policy-value">
@@ -1675,7 +1753,7 @@ const thresholdBands = useMemo(() => {
 
       <div className="policy-row">
         <span className="policy-label">
-          Retry delay
+          Retry delay <HelpTip term="retry_delay" />
         </span>
 
         <span className="policy-value">
@@ -1688,7 +1766,7 @@ const thresholdBands = useMemo(() => {
 
       <div className="policy-row">
         <span className="policy-label">
-          Isolation
+          Isolation <HelpTip term="isolation" />
         </span>
 
         <span className="policy-value">
@@ -1714,7 +1792,7 @@ const thresholdBands = useMemo(() => {
           <div className="card-header">
             <div>
               <h2 className="card-title">
-                Policy Explainability
+                Policy Explainability <HelpTip term="explainability" />
               </h2>
 
               <p className="card-description">
@@ -1772,7 +1850,7 @@ const thresholdBands = useMemo(() => {
 
         <div className="explanation-item">
           <span className="explanation-label">
-            Strategy
+            Strategy <HelpTip term="strategies" />
           </span>
 
           <span className="explanation-value">
@@ -1783,7 +1861,7 @@ const thresholdBands = useMemo(() => {
 
         <div className="explanation-item">
           <span className="explanation-label">
-            Window size
+            Window size <HelpTip term="window_size" />
           </span>
 
           <span className="explanation-value">
@@ -1931,7 +2009,7 @@ const thresholdBands = useMemo(() => {
           <div className="card-header">
             <div>
               <h2 className="card-title">
-                Dead Letter Queue
+                Dead Letter Queue <HelpTip term="dlq" />
               </h2>
 
               <p className="card-description">
@@ -2003,7 +2081,7 @@ const thresholdBands = useMemo(() => {
                     <th><input type="checkbox" aria-label="Select all dead letters" checked={dlqItems.length > 0 && selectedDlqIds.length === dlqItems.length} onChange={(event) => setSelectedDlqIds(event.target.checked ? dlqItems.map((item) => item.delivery_id) : [])} /></th>
                     <th>Delivery</th>
                     <th>Endpoint</th>
-                    <th>Reason</th>
+                    <th>Reason <HelpTip term="dlq_reason" /></th>
                     <th>Attempts</th>
                     <th>Last Error</th>
                     <th>Failed At</th>
@@ -2086,7 +2164,7 @@ const thresholdBands = useMemo(() => {
         <article className="dashboard-card state-journal-card">
           <div className="card-header">
             <div>
-              <h2 className="card-title">State Transition Journal</h2>
+              <h2 className="card-title">State Transition Journal <HelpTip term="journal" /></h2>
               <p className="card-description">
                 State changes observed from the live policy stream
               </p>
@@ -2158,73 +2236,10 @@ const thresholdBands = useMemo(() => {
       </section>
       )}
 
-      {activeTab === "multi-endpoint" && (
-        <section className="multi-endpoint-page">
-          <article className="dashboard-card">
-            <div className="card-header">
-              <div>
-                <h2 className="card-title">Multi-Endpoint Isolation</h2>
-                <p className="card-description">
-                  Compare the failing endpoint with a healthy neighbor sharing the same worker pool.
-                </p>
-              </div>
-              <button
-                type="button"
-                className="fault-apply"
-                onClick={() => void loadMultiEndpointData()}
-                disabled={multiEndpointLoading}
-              >
-                {multiEndpointLoading ? "Loading..." : "Refresh comparison"}
-              </button>
-            </div>
-
-            {multiEndpointError && (
-              <div className="dlq-error" role="alert">{multiEndpointError}</div>
-            )}
-
-            {multiEndpointData && (
-              <div className="multi-endpoint-summary">
-                <span>Worker pool: <strong>{multiEndpointData.worker_pool_size}</strong></span>
-                <span>Strategies: <strong>{multiEndpointData.strategies?.length ?? 0}</strong></span>
-              </div>
-            )}
-
-            {!multiEndpointData && !multiEndpointLoading ? (
-              <div className="chart-empty">Choose this tab to load the isolation comparison.</div>
-            ) : multiEndpointData ? (
-              <>
-                <div className="multi-endpoint-chart">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={multiEndpointChartData}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="strategy" />
-                      <YAxis label={{ value: "Throughput (events/s)", angle: -90, position: "insideLeft" }} />
-                      <Tooltip />
-                      <Legend />
-                      <Bar dataKey="Failing endpoint" fill="#ef4444" />
-                      <Bar dataKey="Healthy neighbor" fill="#22c55e" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-                <div className="multi-endpoint-cards">
-                  {(multiEndpointData.strategies ?? []).map((result) => (
-                    <div className="multi-endpoint-card" key={result.strategy}>
-                      <strong>{result.strategy}</strong>
-                      <span className={result.quarantine_triggered ? "isolation-badge active" : "isolation-badge"}>
-                        {result.quarantine_triggered ? "Quarantine triggered" : "No quarantine"}
-                      </span>
-                      <span>Healthy throughput: {Number(result.healthy?.throughput_events_per_sec ?? 0).toFixed(2)} events/s</span>
-                      <span>Healthy queue wait: {Number(result.healthy?.avg_queue_wait_ms ?? 0).toFixed(1)} ms</span>
-                    </div>
-                  ))}
-                </div>
-              </>
-            ) : null}
-          </article>
-        </section>
-      )}
+      {activeTab === "multi-endpoint" && <NoisyNeighbour />}
 
       {activeTab === "benchmark" && <BenchmarkTab />}
+      {activeTab === "lab" && <ScenarioLab />}
     </main>
   );
 }

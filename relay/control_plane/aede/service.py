@@ -22,6 +22,10 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from relay.control_plane.aede.synthesizer import synthesize_policy
 from relay.control_plane.eri.calculator import compute_eri
 from relay.control_plane.explainability.record import ExplainabilityRecord
+from relay.control_plane.state_machine.quarantine import (
+    hold_expired,
+    quarantine_hold_seconds,
+)
 from relay.control_plane.state_machine.transitions import next_state
 from relay.infrastructure.auth.signing import hmac_required_from_env
 from relay.infrastructure.cache import (
@@ -79,6 +83,11 @@ class AEDEService:
         quarantine_thresh = float(os.environ.get("AEDE_QUARANTINE_THRESHOLD", "30.0"))
         # Probation length for RECOVERING (ADR 0023); 0 keeps the benchmark's model.
         recovery_min_samples = int(os.environ.get("AEDE_RECOVERY_MIN_SAMPLES", "0"))
+        # Timed quarantine (ADR 0027): probe again after this many seconds,
+        # doubling after each failed recovery up to the maximum. 0 disables
+        # it, leaving operator restore as the only way out.
+        self._quarantine_hold_base = int(os.environ.get("AEDE_QUARANTINE_DURATION_SECONDS", "300"))
+        self._quarantine_hold_max = int(os.environ.get("AEDE_QUARANTINE_MAX_DURATION_SECONDS", "3600"))
         # Wider hysteresis gaps than the original 80/90, 60/70: empirically, ERI during
         # sustained borderline (not catastrophic) degradation swings by ~40 points within the
         # sliding window (observed on a long-duration moderate-degradation scenario), which
@@ -111,6 +120,18 @@ class AEDEService:
         self._telemetry_windows: Dict[str, List[Telemetry]] = {}
         # When each endpoint was last restored by an operator (ADR 0020).
         self._restored_at: Dict[str, datetime] = {}
+        # When each endpoint's current quarantine began, and how many
+        # recoveries in a row have failed (ADR 0027).
+        self._quarantined_at: Dict[str, datetime] = {}
+        self._relapses: Dict[str, int] = {}
+        # Told when an endpoint completes recovery (RECOVERING -> AVAILABLE).
+        # AEDE only announces it; acting on it (replay) is the Data Plane's job.
+        self._recovery_listener: Optional[Callable[[str, datetime], Any]] = None
+        self._listener_tasks: set = set()
+
+    def set_recovery_listener(self, listener: Optional[Callable[[str, datetime], Any]]) -> None:
+        """Register an async callable(endpoint_id, recovered_at) for completed recoveries."""
+        self._recovery_listener = listener
 
     def get_endpoint_state(self, endpoint_id: str) -> EndpointState:
         """Return the current EndpointState for the given endpoint (defaults to AVAILABLE)."""
@@ -137,6 +158,74 @@ class AEDEService:
             return EndpointState.RECOVERING
         return current
 
+    def quarantine_hold(self, endpoint_id: str) -> int:
+        """Seconds the endpoint's current quarantine lasts before a probe (0: until restored)."""
+        return quarantine_hold_seconds(
+            self._quarantine_hold_base,
+            self._quarantine_hold_max,
+            self._relapses.get(endpoint_id, 0),
+        )
+
+    async def check_quarantine_hold(self, endpoint_id: str, now: datetime) -> EndpointState:
+        """
+        End a quarantine whose hold has expired (ADR 0027).
+
+        The endpoint moves to RECOVERING exactly as for an operator restore,
+        so its next deliveries are probes judged on fresh evidence. Called
+        by the Dispatcher with the current time; AEDE never reads the clock.
+        """
+        if self.get_endpoint_state(endpoint_id) != EndpointState.QUARANTINED:
+            return self.get_endpoint_state(endpoint_id)
+        hold = self.quarantine_hold(endpoint_id)
+        if not hold_expired(self._quarantined_at.get(endpoint_id), now, hold):
+            return EndpointState.QUARANTINED
+
+        attempt = self._relapses.get(endpoint_id, 0) + 1
+        applied = self._apply_restore(
+            endpoint_id,
+            now,
+            reason=(
+                f"Quarantine hold of {hold} s expired: probing the endpoint automatically "
+                f"(recovery attempt {attempt}). If the probes fail it is quarantined again "
+                f"for longer."
+            ),
+        )
+        if applied is not None:
+            eri, policy, record = applied
+            logger.info(
+                "Quarantine hold expired for endpoint %s after %s s; probing (attempt %s)",
+                endpoint_id,
+                hold,
+                attempt,
+            )
+            await self._publish_evaluation(
+                endpoint_id=endpoint_id,
+                eri=eri,
+                state_before=EndpointState.QUARANTINED,
+                state_after=EndpointState.RECOVERING,
+                policy=policy,
+                explainability_record=record,
+                computed_at=now,
+                window_size=0,
+            )
+        return self.get_endpoint_state(endpoint_id)
+
+    def _track_quarantine(
+        self,
+        endpoint_id: str,
+        state_before: EndpointState,
+        state_after: EndpointState,
+        at: datetime,
+    ) -> None:
+        """Start the hold on entering quarantine; count relapses; forget on recovery."""
+        if state_after == EndpointState.QUARANTINED and state_before != EndpointState.QUARANTINED:
+            self._quarantined_at[endpoint_id] = at
+            if state_before == EndpointState.RECOVERING:
+                self._relapses[endpoint_id] = self._relapses.get(endpoint_id, 0) + 1
+        elif state_after == EndpointState.AVAILABLE:
+            self._quarantined_at.pop(endpoint_id, None)
+            self._relapses.pop(endpoint_id, None)
+
     async def restore_and_publish(
         self, endpoint_id: str, restored_at: datetime
     ) -> EndpointState:
@@ -162,7 +251,10 @@ class AEDEService:
         return self.get_endpoint_state(endpoint_id)
 
     def _apply_restore(
-        self, endpoint_id: str, restored_at: datetime
+        self,
+        endpoint_id: str,
+        restored_at: datetime,
+        reason: Optional[str] = None,
     ) -> Optional[Tuple[ERIScore, DeliveryPolicy, ExplainabilityRecord]]:
         """
         QUARANTINED -> RECOVERING, per ADR 0020.
@@ -194,7 +286,8 @@ class AEDEService:
         )
         record = record.model_copy(
             update={
-                "reason": (
+                "reason": reason
+                or (
                     "Admin restore: endpoint moved from QUARANTINED to RECOVERING. "
                     "ERI window reset; recovery is judged on attempts started after the restore."
                 ),
@@ -320,6 +413,17 @@ class AEDEService:
             thresholds=self._thresholds,
         )
         self.set_endpoint_state(endpoint_id, new_state)
+        self._track_quarantine(endpoint_id, current_state, new_state, computed_at)
+        if (
+            self._recovery_listener is not None
+            and current_state == EndpointState.RECOVERING
+            and new_state == EndpointState.AVAILABLE
+        ):
+            # Not awaited: the Worker that reported this attempt should not
+            # wait for a replay of other deliveries.
+            task = asyncio.create_task(self._recovery_listener(endpoint_id, computed_at))
+            self._listener_tasks.add(task)
+            task.add_done_callback(self._listener_tasks.discard)
 
         # 4. Policy synthesis
         policy, explainability_record = synthesize_policy(

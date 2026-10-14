@@ -41,6 +41,7 @@ To re-check later without wiping data: `.venv\Scripts\python.exe demo\smoke_chec
 - **State machine:** degradation and recovery use different thresholds (hysteresis), so the endpoint does not flap.
 - **Isolation:** QUARANTINED stops HTTP to the endpoint. Events are kept, never dropped, and replay creates new delivery records; history is never edited.
 - **Recovery:** after a restore the endpoint must show 25 good observations before it is AVAILABLE again.
+- **Self-healing:** nobody has to restore by hand. A quarantine is a timed hold (30 s in this demo, 5 minutes by default, doubling each time the endpoint is still down); then Relay probes the endpoint, and resends the held events once it has recovered. At the 5-minute default the benchmark results are unchanged.
 - **Fallback:** this is a *simulated* AEDE outage. AEDE runs inside the dispatcher, so we cut it off rather than kill a process. Tier 2 is the in-memory policy cache, not Redis.
 - **Benchmark:** C cuts wasted retries by about 80% against A and 67% against B, with the same success rate. C's total retry delay is *higher*, because it deliberately waits. Do not present delay or MTTR as a win.
 - **Signatures:** every request is HMAC-signed; the badge is the receiving simulator's own verification.
