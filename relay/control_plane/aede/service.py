@@ -24,7 +24,11 @@ from relay.control_plane.eri.calculator import compute_eri
 from relay.control_plane.explainability.record import ExplainabilityRecord
 from relay.control_plane.state_machine.transitions import next_state
 from relay.infrastructure.auth.signing import hmac_required_from_env
-from relay.infrastructure.cache import InMemoryPolicyCache, PolicyCache
+from relay.infrastructure.cache import (
+    InMemoryPolicyCache,
+    PolicyCache,
+    policy_cache_ttl_from_env,
+)
 from relay.infrastructure.messaging.admin import EVENTS_INTERNAL_POLICY_TOPIC
 from relay.infrastructure.messaging.producer import publish
 from relay.infrastructure.persistence.explainability_repo import (
@@ -93,6 +97,7 @@ class AEDEService:
             recovery_min_samples=recovery_min_samples,
         )
         self._window_size = window_size
+        self._policy_cache_ttl = policy_cache_ttl_from_env()
         # Fixed for the life of the service and passed to every synthesis
         # as an explicit argument (the synthesizer never reads the env).
         self._hmac_required = (
@@ -200,7 +205,7 @@ class AEDEService:
             self._cache.set_policy(
                 endpoint_id=endpoint_id,
                 policy=policy,
-                ttl_seconds=300,
+                ttl_seconds=self._policy_cache_ttl,
             )
         except Exception:
             logger.exception("Failed to update policy cache for endpoint %s", endpoint_id)
@@ -335,7 +340,7 @@ class AEDEService:
             self._cache.set_policy(
                 endpoint_id=endpoint_id,
                 policy=policy,
-                ttl_seconds=300,
+                ttl_seconds=self._policy_cache_ttl,
             )
         except Exception:
             logger.exception("Failed to update policy cache for endpoint %s", endpoint_id)

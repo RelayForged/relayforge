@@ -168,6 +168,8 @@ services:
       RELAY_WEBHOOK_TIMEOUT_SECONDS: "2"
       # RECOVERING needs this many observations before AVAILABLE (ADR 0023).
       AEDE_RECOVERY_MIN_SAMPLES: "25"
+      # A cached policy is served as Tier 2 for this long during an AEDE outage (ADR 0024).
+      RELAY_POLICY_CACHE_TTL_SECONDS: "30"
       # Dev-only signing secret; the simulator verifies with the same value.
       RELAY_HMAC_REQUIRED: "true"
       RELAY_WEBHOOK_SIGNING_SECRET: ${RELAY_WEBHOOK_SIGNING_SECRET:-relay-dev-signing-secret}

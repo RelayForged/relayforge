@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
+import json
 import logging
 import os
 from typing import Any, Dict, List, Optional
@@ -33,6 +34,8 @@ from relay.api.deps import (
 from relay.api.endpoints import publish_restore
 from relay.api.events import build_event, persist_and_publish
 from relay.api.security import require_owner
+from relay.infrastructure.messaging.admin import EVENTS_INTERNAL_ENDPOINT_TOPIC
+from relay.infrastructure.messaging.producer import publish
 from relay.infrastructure.persistence.endpoint_repository import EndpointRepository
 from relay.infrastructure.persistence.event_repository import EventRepository
 from relay.infrastructure.persistence.subscription_repository import (
@@ -152,6 +155,10 @@ class ActivateScenarioRequest(BaseModel):
     scenario: str
 
 
+class AEDEAvailabilityRequest(BaseModel):
+    available: bool
+
+
 class DemoStatus(BaseModel):
     active_scenario: Optional[str] = None
     endpoint_id: Optional[str] = None
@@ -162,6 +169,9 @@ class DemoStatus(BaseModel):
     events_published: int = 0
     publish_failures: int = 0
     last_error: Optional[str] = None
+    # What the operator last asked for. The Dispatcher acts on it; the tier
+    # actually serving shows up as `policy_tier` on the dashboard feed.
+    aede_available: bool = True
 
 
 class DemoController:
@@ -171,6 +181,9 @@ class DemoController:
         self._task: Optional[asyncio.Task[None]] = None
         self._lock = asyncio.Lock()
         self._status = DemoStatus()
+
+    def set_aede_available(self, available: bool) -> None:
+        self._status = self._status.model_copy(update={"aede_available": available})
 
     def status(self) -> DemoStatus:
         return self._status.model_copy(
@@ -367,6 +380,35 @@ async def activate_scenario(
             ) from exc
 
     return await controller.activate(preset, endpoint, subscription, events)
+
+
+@router.post("/aede", response_model=DemoStatus)
+async def set_aede_availability(
+    body: AEDEAvailabilityRequest,
+    _owner_id: str = Depends(require_owner),
+) -> DemoStatus:
+    """
+    Simulate an AEDE outage, or end one (ADR 0024).
+
+    AEDE runs inside the Dispatcher, so this cannot stop a process. It sends
+    the Dispatcher a control message; while AEDE is unavailable the
+    Dispatcher serves Tier 2 cached policies, then Tier 3 static defaults.
+    """
+    try:
+        await publish(
+            EVENTS_INTERNAL_ENDPOINT_TOPIC,
+            key="aede",
+            value=json.dumps(
+                {"action": "aede_availability", "available": body.available}
+            ).encode("utf-8"),
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Publishing the AEDE availability command failed.",
+        ) from exc
+    controller.set_aede_available(body.available)
+    return controller.status()
 
 
 @router.post("/stop", response_model=DemoStatus)

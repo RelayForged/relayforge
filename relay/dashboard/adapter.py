@@ -405,6 +405,8 @@ def build_live_state_update(
     update["eri_weights"] = get_eri_weights(weights)
     update["thresholds"] = update["policy_explanation"].get("thresholds", {})
     update["delivery_events"] = delivery_events or []
+    # 1 = live AEDE policy, 2 = cached policy, 3 = static fallback (ADR 0024).
+    update["policy_tier"] = store.get_policy_tier(endpoint_id) if endpoint_id else 1
     return update
 
 

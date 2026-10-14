@@ -20,7 +20,7 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 from pydantic import ValidationError
 
@@ -31,15 +31,17 @@ from relay.data_plane.replay.manager import ReplayWork
 from relay.data_plane.retry_manager.manager import RetryManager, RetryWork
 from relay.data_plane.workers.webhook import WebhookWorker
 from relay.infrastructure.auth.signing import hmac_required_from_env
-from relay.infrastructure.messaging.producer import warmup as warmup_producer
+from relay.infrastructure.messaging.producer import publish, warmup as warmup_producer
 from relay.infrastructure.cache import (
     InMemoryPolicyCache,
     PolicyCache,
     PolicyFallbackManager,
+    policy_cache_ttl_from_env,
 )
 from relay.infrastructure.feature_flags import FeatureFlags
 from relay.infrastructure.messaging.admin import (
     EVENTS_INTERNAL_ENDPOINT_TOPIC,
+    EVENTS_INTERNAL_POLICY_TOPIC,
     EVENTS_INTERNAL_REPLAY_TOPIC,
 )
 from relay.infrastructure.messaging.consumer import (
@@ -73,6 +75,7 @@ DEFAULT_MAX_CONCURRENT_MESSAGES = 16
 # Retries waiting for next_attempt_at. Each holds a RetryWork in memory
 # for up to max_delay_seconds.
 DEFAULT_MAX_IN_FLIGHT_RETRIES = 500
+TierPublisher = Callable[..., Awaitable[None]]
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +109,7 @@ class Dispatcher:
         cache: Optional[PolicyCache] = None,
         feature_flags: Optional[FeatureFlags] = None,
         aede_service: Optional[AEDEService] = None,
+        tier_publisher: Optional[TierPublisher] = None,
     ) -> None:
         self._consumer = consumer or KafkaConsumer(
             topics=(
@@ -135,6 +139,15 @@ class Dispatcher:
             cache=self._cache, hmac_required=hmac_required
         )
         self._aede_service = aede_service
+        # Operator-controlled AEDE outage, for demonstrating the fallback
+        # hierarchy (ADR 0024). While False, Tier 1 is skipped and AEDE
+        # receives no telemetry, as if its process were down.
+        self._aede_available = True
+        self._policy_cache_ttl = policy_cache_ttl_from_env()
+        # Which tier last served each endpoint. Changes are logged and, when
+        # a publisher is given, announced on the policy topic for the dashboard.
+        self._policy_tiers: dict[str, int] = {}
+        self._tier_publisher = tier_publisher
 
         self._worker = worker or WebhookWorker(
             adapter=WebhookDeliveryAdapter(),
@@ -201,7 +214,15 @@ class Dispatcher:
             data = json.loads(message.value)
             action = data.get("action")
             endpoint_id = data.get("endpoint_id")
-            if action == "restore" and endpoint_id and self._aede_service is not None:
+            if action == "aede_availability":
+                self._set_aede_available(bool(data.get("available", True)))
+            elif action == "restore" and endpoint_id and self._aede_service is not None:
+                if not self._aede_available:
+                    logger.warning(
+                        "Restore for endpoint=%s ignored: AEDE is marked unavailable",
+                        endpoint_id,
+                    )
+                    return
                 await self._aede_service.restore_and_publish(
                     endpoint_id, restored_at=datetime.now(timezone.utc)
                 )
@@ -215,6 +236,56 @@ class Dispatcher:
         finally:
             await self._consumer.commit(message)
 
+
+    def _set_aede_available(self, available: bool) -> None:
+        """
+        Simulated AEDE outage (ADR 0024). AEDE runs in this process, so it
+        cannot be stopped on its own; this cuts it off instead. Policy
+        resolution skips Tier 1 and the Worker stops feeding it telemetry.
+        """
+        if available == self._aede_available:
+            return
+        self._aede_available = available
+        if hasattr(self._worker, "_aede_service"):
+            self._worker._aede_service = self._aede_service if available else None
+        if available:
+            logger.warning("AEDE marked available: policy resolution returns to Tier 1")
+        else:
+            logger.warning(
+                "AEDE marked unavailable: serving Tier 2 cached policies (TTL %ss), then Tier 3",
+                self._policy_cache_ttl,
+            )
+
+    async def _note_policy_tier(self, endpoint_id: str, tier: int, at: datetime) -> None:
+        """Log and announce a change of serving tier. Normal Tier 1 service is silent."""
+        previous = self._policy_tiers.get(endpoint_id)
+        self._policy_tiers[endpoint_id] = tier
+        if previous == tier or (previous is None and tier == 1):
+            return
+        logger.warning(
+            "Policy tier for endpoint=%s changed %s -> %s", endpoint_id, previous, tier
+        )
+        if self._tier_publisher is None:
+            return
+        try:
+            await self._tier_publisher(
+                EVENTS_INTERNAL_POLICY_TOPIC,
+                key=endpoint_id,
+                value=json.dumps(
+                    {
+                        "type": "policy_tier",
+                        "endpoint_id": endpoint_id,
+                        "tier": tier,
+                        "at": at.isoformat(),
+                    }
+                ).encode("utf-8"),
+            )
+        except Exception:
+            logger.exception(
+                "Could not publish policy tier change endpoint_id=%s tier=%s",
+                endpoint_id,
+                tier,
+            )
 
     async def _accept_replay(self, message: KafkaMessage) -> None:
         try:
@@ -425,7 +496,7 @@ class Dispatcher:
             return
 
         endpoint_state = getattr(endpoint, "state", EndpointState.AVAILABLE)
-        if self._aede_service is not None:
+        if self._aede_service is not None and self._aede_available:
             endpoint_state = self._aede_service.get_endpoint_state(subscription.endpoint_id)
         elif isinstance(endpoint_state, str):
             try:
@@ -433,11 +504,12 @@ class Dispatcher:
             except ValueError:
                 endpoint_state = EndpointState.AVAILABLE
 
-        policy = self._get_delivery_policy(
+        policy, tier = self._resolve_policy(
             endpoint_id=subscription.endpoint_id,
             endpoint_state=endpoint_state,
             computed_at=computed_at,
         )
+        await self._note_policy_tier(subscription.endpoint_id, tier, computed_at)
 
         if policy.isolation_policy.action in _SKIP_HTTP:
             # Delivery row stays durable in PENDING. No attempt row is
@@ -580,6 +652,14 @@ class Dispatcher:
         endpoint_state: EndpointState,
         computed_at: datetime,
     ) -> DeliveryPolicy:
+        return self._resolve_policy(endpoint_id, endpoint_state, computed_at)[0]
+
+    def _resolve_policy(
+        self,
+        endpoint_id: str,
+        endpoint_state: EndpointState,
+        computed_at: datetime,
+    ) -> tuple[DeliveryPolicy, int]:
         """
         Queries delivery policy dynamically using the Three-Tier Policy Fallback Hierarchy (ADR 0011):
         Tier 1: Live active strategy evaluation (AEDE / Strategy C/B/A) -> updates policy cache.
@@ -587,16 +667,20 @@ class Dispatcher:
         Tier 3: Static fallback defaults (safe Strategy A baseline).
         """
         # Tier 1: Live AEDE service or strategy evaluation
-        if self._flags.aede_enabled and self._aede_service is not None:
+        if not self._aede_available:
+            pass
+        elif self._flags.aede_enabled and self._aede_service is not None:
             try:
                 policy = self._aede_service.get_current_policy(
                     endpoint_id, computed_at=computed_at
                 )
                 try:
-                    self._cache.set_policy(endpoint_id, policy, ttl_seconds=300)
+                    self._cache.set_policy(
+                        endpoint_id, policy, ttl_seconds=self._policy_cache_ttl
+                    )
                 except Exception:
                     pass
-                return policy
+                return policy, 1
             except Exception as e:
                 logger.warning(
                     "Tier 1 AEDE live policy evaluation failed for %s (%s); querying Tier 2 cache",
@@ -614,10 +698,12 @@ class Dispatcher:
                 )
                 policy = res[0] if isinstance(res, tuple) else res
                 try:
-                    self._cache.set_policy(endpoint_id, policy, ttl_seconds=300)
+                    self._cache.set_policy(
+                        endpoint_id, policy, ttl_seconds=self._policy_cache_ttl
+                    )
                 except Exception:
                     pass
-                return policy
+                return policy, 1
             except Exception as e:
                 logger.warning(
                     "Tier 1 policy evaluation failed for %s (%s); querying Tier 2 cache",
@@ -631,12 +717,15 @@ class Dispatcher:
         )
         if cached is not None:
             logger.info("Serving Tier 2 cached policy for %s", endpoint_id)
-            return cached
+            return cached, 2
 
         # Tier 3: Static Fallback Policy (Strategy A defaults)
         logger.warning("Serving Tier 3 static fallback policy for %s", endpoint_id)
-        return self._fallback_manager.get_tier_3_static_policy(
-            endpoint_id, computed_at=computed_at
+        return (
+            self._fallback_manager.get_tier_3_static_policy(
+                endpoint_id, computed_at=computed_at
+            ),
+            3,
         )
 
 
@@ -650,7 +739,9 @@ async def run() -> None:
     await warmup_producer()
     cache = InMemoryPolicyCache()
     aede = AEDEService(cache=cache) if flags.aede_enabled else None
-    await Dispatcher(aede_service=aede, cache=cache, feature_flags=flags).run()
+    await Dispatcher(
+        aede_service=aede, cache=cache, feature_flags=flags, tier_publisher=publish
+    ).run()
 
 
 def main() -> None:

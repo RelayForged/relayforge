@@ -47,6 +47,11 @@ async def _consume_policy_events() -> None:
         async for msg in consumer:
             try:
                 data = json.loads(msg.value.decode("utf-8"))
+                if data.get("type") == "policy_tier":
+                    # The Dispatcher announcing a fallback tier (ADR 0024).
+                    state_store.record_policy_tier(data["endpoint_id"], int(data["tier"]))
+                    await consumer.commit(msg)
+                    continue
                 endpoint_id = data["endpoint_id"]
                 state = EndpointState(data["state"])
                 eri_score = ERIScore.model_validate(data["eri_score"])

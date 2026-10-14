@@ -31,6 +31,7 @@ docs/small-decisions-personA/audit-recommendations-declined.md, Declined 3):
    MVP single-tenant; production Redis has its own eviction.
 """
 
+import os
 from typing import Optional, Protocol
 from datetime import datetime, timezone
 
@@ -38,6 +39,23 @@ from relay.kernel.policies.delivery_policy import DeliveryPolicy
 from relay.control_plane.aede.strategies.static import StrategyA
 from relay.kernel.value_objects.endpoint_state import EndpointState
 from relay.kernel.value_objects.eri import ERIScore
+
+
+DEFAULT_POLICY_CACHE_TTL_SECONDS = 300
+
+
+def policy_cache_ttl_from_env() -> int:
+    """
+    How long a cached policy stays servable as Tier 2, from
+    RELAY_POLICY_CACHE_TTL_SECONDS. Everything that writes the shared cache
+    uses this one value, so the last write before an AEDE outage expires on
+    schedule (ADR 0024). Read once, at construction.
+    """
+    try:
+        value = int(os.environ.get("RELAY_POLICY_CACHE_TTL_SECONDS", DEFAULT_POLICY_CACHE_TTL_SECONDS))
+    except ValueError:
+        return DEFAULT_POLICY_CACHE_TTL_SECONDS
+    return value if value > 0 else DEFAULT_POLICY_CACHE_TTL_SECONDS
 
 
 class PolicyCache(Protocol):
