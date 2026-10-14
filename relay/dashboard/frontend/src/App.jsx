@@ -147,6 +147,22 @@ const [multiEndpointLoading, setMultiEndpointLoading] = useState(false);
 const [multiEndpointError, setMultiEndpointError] = useState("");
 const [alerts, setAlerts] = useState([]);
 const [signatures, setSignatures] = useState({});
+
+// Alerts close themselves after a while; the journal keeps the history.
+const ALERT_LIFETIME_MS = 15000;
+useEffect(() => {
+  if (!alerts.length) {
+    return undefined;
+  }
+  const timer = window.setInterval(() => {
+    const cutoff = Date.now() - ALERT_LIFETIME_MS;
+    setAlerts((previous) => {
+      const kept = previous.filter((item) => (item.createdAt ?? Date.now()) > cutoff);
+      return kept.length === previous.length ? previous : kept;
+    });
+  }, 1000);
+  return () => window.clearInterval(timer);
+}, [alerts.length]);
 const [faultError, setFaultError] = useState("");
 const [aedeAvailable, setAedeAvailable] = useState(true);
 const [aedeSwitchError, setAedeSwitchError] = useState("");
@@ -225,6 +241,7 @@ stateAfter: explanation.state_after,
                 const explanation = message.policy_explanation ?? {};
                 const nextAlert = {
                   id: `${nextState}-${explanation.record_id ?? Date.now()}`,
+                  createdAt: Date.now(),
                   state: nextState,
                   endpointId: message.endpoint_id ?? "Current endpoint",
                   eri: formatEri(message.eri),
@@ -353,6 +370,7 @@ stateAfter: explanation.state_after,
       setAlerts((previousAlerts) => [
         {
           id: `restore-${Date.now()}`,
+          createdAt: Date.now(),
           state: "RESTORE_ERROR",
           endpointId,
           eri: formatEri(dashboardState.eri),
@@ -820,6 +838,21 @@ useEffect(() => {
   });
 }, [dashboardState.eri_history]);
 
+const requestRhythm = useMemo(() => {
+  const times = (dashboardState.delivery_events ?? [])
+    .map((event) => new Date(event.timestamp).getTime())
+    .filter(Number.isFinite);
+  if (times.length < 2) {
+    return null;
+  }
+  const gaps = times.slice(0, -1).map((time, i) => Math.max(0, (time - times[i + 1]) / 1000));
+  return {
+    count: times.length,
+    average: gaps.reduce((sum, gap) => sum + gap, 0) / gaps.length,
+    longest: Math.max(...gaps),
+  };
+}, [dashboardState.delivery_events]);
+
 const radarData = useMemo(() => {
   const scores = dashboardState.eri_sub_scores ?? {};
   const weights = dashboardState.eri_weights ?? {};
@@ -982,6 +1015,14 @@ const thresholdBands = useMemo(() => {
         <aside className="alert-stack" aria-live="assertive">
           {alerts.map((alert) => (
             <div className={`alert-toast ${alert.state === "QUARANTINED" ? "quarantine" : "unstable"}`} key={alert.id}>
+              <button
+                type="button"
+                className="alert-toast-close"
+                aria-label="Close"
+                onClick={() => setAlerts((previous) => previous.filter((item) => item.id !== alert.id))}
+              >
+                ×
+              </button>
               <div className="alert-toast-title">{alert.title}</div>
               <div>Endpoint {alert.endpointId} {alert.state === "QUARANTINED" ? "has been quarantined." : "is unstable."}</div>
               <div>ERI: {alert.eri} | Success rate: {alert.successRate}</div>
@@ -996,6 +1037,11 @@ const thresholdBands = useMemo(() => {
               </div>
             </div>
           ))}
+          {alerts.length > 1 && (
+            <button type="button" className="alert-dismiss-all" onClick={() => setAlerts([])}>
+              Dismiss all
+            </button>
+          )}
         </aside>
       )}
 
@@ -1529,8 +1575,16 @@ const thresholdBands = useMemo(() => {
               </h2>
 
               <p className="card-description">
-                Recent delivery activity
+                Recent delivery activity, newest first. The grey badge is the time since the
+                previous attempt; amber means a long wait (backoff or isolation).
               </p>
+              {requestRhythm && (
+                <p className="timeline-rhythm">
+                  Last {requestRhythm.count} attempts: one every{" "}
+                  <b>{requestRhythm.average.toFixed(1)} s</b> on average, longest gap{" "}
+                  <b>{requestRhythm.longest.toFixed(1)} s</b>
+                </p>
+              )}
             </div>
           </div>
 
@@ -1540,7 +1594,7 @@ const thresholdBands = useMemo(() => {
                 No delivery events available.
               </div>
             ) : (
-              dashboardState.delivery_events.map((event) => (
+              dashboardState.delivery_events.map((event, index, events) => (
   <div
     className="timeline-event"
     key={event.id}
@@ -1549,6 +1603,24 @@ const thresholdBands = useMemo(() => {
       <span className="timeline-time">
         {formatTime(event.timestamp)}
       </span>
+      {(() => {
+        // Rows are newest first, so the previous request is the next row.
+        const older = events[index + 1];
+        const gap = older
+          ? (new Date(event.timestamp) - new Date(older.timestamp)) / 1000
+          : null;
+        if (gap == null || !Number.isFinite(gap)) {
+          return null;
+        }
+        return (
+          <span
+            className={`timeline-gap ${gap >= 5 ? "long" : ""}`}
+            title="Time since the previous delivery attempt to this endpoint"
+          >
+            +{gap < 10 ? gap.toFixed(1) : Math.round(gap)} s
+          </span>
+        );
+      })()}
 
       <span
         className={`timeline-status ${
