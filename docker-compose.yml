@@ -129,7 +129,7 @@ services:
       AEDE_ENABLED: "true"
       ERI_ENABLED: "true"
       STATE_MACHINE_ENABLED: "true"
-      AEDE_QUARANTINE_THRESHOLD: "45.0"
+      AEDE_QUARANTINE_THRESHOLD: "30.0"
       # Demo scenario engine (relay/api/demo.py). Off unless enabled here.
       RELAY_DEMO_ENABLED: "true"
       SIMULATOR_URL: http://simulator:8080
@@ -163,9 +163,13 @@ services:
       AEDE_ENABLED: "true"
       ERI_ENABLED: "true"
       STATE_MACHINE_ENABLED: "true"
-      AEDE_QUARANTINE_THRESHOLD: "45.0"
+      AEDE_QUARANTINE_THRESHOLD: "30.0"
       # Short enough that a simulated outage collapses ERI within seconds.
       RELAY_WEBHOOK_TIMEOUT_SECONDS: "2"
+      # RECOVERING needs this many observations before AVAILABLE (ADR 0023).
+      AEDE_RECOVERY_MIN_SAMPLES: "25"
+      # A cached policy is served as Tier 2 for this long during an AEDE outage (ADR 0024).
+      RELAY_POLICY_CACHE_TTL_SECONDS: "30"
       # Dev-only signing secret; the simulator verifies with the same value.
       RELAY_HMAC_REQUIRED: "true"
       RELAY_WEBHOOK_SIGNING_SECRET: ${RELAY_WEBHOOK_SIGNING_SECRET:-relay-dev-signing-secret}

@@ -356,10 +356,8 @@ async def test_terminal_delivery_is_not_reprocessed(
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "action", [IsolationAction.PAUSE, IsolationAction.QUARANTINE]
-)
-async def test_pause_and_quarantine_write_no_attempt_row(
+@pytest.mark.parametrize("action", [IsolationAction.QUARANTINE])
+async def test_quarantine_writes_no_attempt_row(
     action, deliveries, attempts, consumer, monkeypatch
 ):
     """
@@ -388,6 +386,32 @@ async def test_pause_and_quarantine_write_no_attempt_row(
     # The Delivery stays durable and retryable.
     assert deliveries.only().status == "PENDING"
     assert consumer.committed == [0]
+
+
+async def test_pause_still_delivers(deliveries, attempts, consumer, monkeypatch):
+    """
+    PAUSE is UNSTABLE's throttled delivery, not a stop (ADR 0022). With no
+    HTTP there is no telemetry, and an UNSTABLE endpoint could never leave
+    UNSTABLE.
+    """
+    subscription, endpoint = make_target("OrderCreated")
+    worker = RecordingWorker()
+    dispatcher = build_dispatcher(
+        targets=[(subscription, endpoint)],
+        deliveries=deliveries,
+        attempts=attempts,
+        consumer=consumer,
+        worker=worker,
+    )
+    policy = make_policy(isolation=IsolationAction.PAUSE)
+    monkeypatch.setattr(
+        dispatcher._strategy, "evaluate", lambda *a, **k: (policy, None)
+    )
+
+    await dispatcher.handle_message(business_message(make_event("OrderCreated")))
+
+    assert len(worker.calls) == 1
+    assert attempts.numbers() == [1]
 
 
 # --------------------------------------------------------------------------

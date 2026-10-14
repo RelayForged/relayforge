@@ -237,3 +237,19 @@ def test_websocket_synthetic_source_is_opt_in_and_labelled(monkeypatch) -> None:
 
     assert message["source"] == "synthetic"
     assert message["endpoint_id"] == "dashboard-demo-endpoint"
+
+
+def test_live_update_reports_the_policy_tier() -> None:
+    """Tier 1 unless the Dispatcher has announced a fallback (ADR 0024)."""
+    store = EndpointStateStore()
+
+    def update():
+        return build_live_state_update(
+            endpoint_id="ep-1", store=store, weights=ERIWeights.optimal()
+        )
+
+    assert update()["policy_tier"] == 1
+    store.record_policy_tier("ep-1", 3)
+    assert update()["policy_tier"] == 3
+    store.record_policy_tier("ep-1", 1)
+    assert update()["policy_tier"] == 1

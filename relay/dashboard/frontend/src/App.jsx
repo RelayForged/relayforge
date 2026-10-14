@@ -21,6 +21,13 @@ import {
 } from "recharts";
 import "./App.css";
 import BenchmarkTab from "./BenchmarkTab";
+import {
+  API_URL,
+  DASHBOARD_URL,
+  DASHBOARD_WS_URL,
+  FAULT_MODES,
+  SIMULATOR_URL,
+} from "./config";
 
 const INITIAL_STATE = {
   type: "state_update",
@@ -39,11 +46,13 @@ const INITIAL_STATE = {
   },
 };
 
-const API_BASE_URL = "http://127.0.0.1:8000";
-const DASHBOARD_WS_URL = "ws://127.0.0.1:8090/ws";
-
 function getWebSocketUrl() {
   return DASHBOARD_WS_URL;
+}
+
+function formatEri(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number.toFixed(1) : "--";
 }
 
 function formatTime(timestamp) {
@@ -124,6 +133,10 @@ const [multiEndpointData, setMultiEndpointData] = useState(null);
 const [multiEndpointLoading, setMultiEndpointLoading] = useState(false);
 const [multiEndpointError, setMultiEndpointError] = useState("");
 const [alerts, setAlerts] = useState([]);
+const [signatures, setSignatures] = useState({});
+const [faultError, setFaultError] = useState("");
+const [aedeAvailable, setAedeAvailable] = useState(true);
+const [aedeSwitchError, setAedeSwitchError] = useState("");
 const previousStateRef = useRef(INITIAL_STATE.state);
 
 const scenarioPresets = [
@@ -188,7 +201,6 @@ stateAfter: explanation.state_after,
       websocket.onmessage = (event) => {
         try {
           const message = JSON.parse(event.data);
-          console.log("Dashboard payload:", message);
 
           if (message?.type === "state_update") {
             recordStateTransition(message);
@@ -202,8 +214,11 @@ stateAfter: explanation.state_after,
                   id: `${nextState}-${explanation.record_id ?? Date.now()}`,
                   state: nextState,
                   endpointId: message.endpoint_id ?? "Current endpoint",
-                  eri: message.eri ?? "--",
-                  failures: message.sub_scores?.consecutive_failures ?? "--",
+                  eri: formatEri(message.eri),
+                  successRate:
+                    message.eri_sub_scores?.success_rate != null
+                      ? `${(message.eri_sub_scores.success_rate * 100).toFixed(0)}%`
+                      : "--",
                   title: nextState === "QUARANTINED" ? "Endpoint quarantined" : "Endpoint unstable",
                   message: explanation.reason ?? "",
                 };
@@ -262,10 +277,80 @@ stateAfter: explanation.state_after,
   }, []);
 
 
+  useEffect(() => {
+    void (async () => {
+      try {
+        const response = await fetch(`${API_URL}/demo/status`);
+        if (response.ok) {
+          const status = await response.json();
+          setAedeAvailable(status.aede_available ?? true);
+        }
+      } catch {
+        // The switch defaults to "available"; the tier banner shows the truth.
+      }
+    })();
+  }, []);
+
+  const setAedeAvailability = async (available) => {
+    setAedeSwitchError("");
+    try {
+      const response = await fetch(`${API_URL}/demo/aede`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ available }),
+      });
+      if (!response.ok) {
+        throw new Error(`AEDE switch failed (${response.status})`);
+      }
+      setAedeAvailable(available);
+    } catch (error) {
+      setAedeSwitchError(
+        error instanceof Error ? error.message : "AEDE switch failed.",
+      );
+    }
+  };
+
   const applyFaultInjection = () => {
+  const selectedMode = FAULT_MODES.find((mode) => mode.value === failureMode);
+
   if (dashboardState.source !== "synthetic") {
+    setFaultError("");
+    void (async () => {
+      try {
+        const response = await fetch(`${SIMULATOR_URL}/simulator/config`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            mode: selectedMode?.simulator ?? failureMode,
+            rate: failureRate / 100,
+            latency_ms: latencyMs,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`Simulator rejected the profile (${response.status})`);
+        }
+
+        setActiveScenario(null);
+      } catch (error) {
+        console.error("Unable to configure simulator:", error);
+        setFaultError(
+          error instanceof Error ? error.message : "Unable to configure simulator.",
+        );
+      }
+    })();
     return;
   }
+
+  if (!selectedMode?.synthetic) {
+    setFaultError("This failure mode needs the live stack.");
+    return;
+  }
+  setFaultError("");
 
   const websocket = websocketRef.current;
 
@@ -278,7 +363,7 @@ stateAfter: explanation.state_after,
       type: "demo_control",
       failure_rate: failureRate / 100,
       latency_ms: latencyMs,
-      failure_mode: failureMode,
+      failure_mode: selectedMode.synthetic,
     }),
   );
 };
@@ -350,13 +435,16 @@ const applyScenarioPreset = (preset) => {
 
     setFailureRate(Math.round(profile.failure_rate * 100));
     setLatencyMs(profile.latency_ms);
-    setFailureMode(profile.failure_mode);
+    setFailureMode(
+      FAULT_MODES.find((mode) => mode.synthetic === profile.failure_mode)?.value ??
+        "mixed",
+    );
     return;
   }
 
   void (async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/demo/scenario`, {
+      const response = await fetch(`${API_URL}/demo/scenario`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -378,6 +466,12 @@ const applyScenarioPreset = (preset) => {
       }
 
       setActiveScenario(payload.active_scenario ?? preset.id);
+
+      if (payload.simulator) {
+        setFailureMode(payload.simulator.mode);
+        setFailureRate(Math.round(payload.simulator.rate * 100));
+        setLatencyMs(payload.simulator.latency_ms);
+      }
     } catch (error) {
       console.error("Unable to activate demo scenario:", error);
       setActiveScenario(null);
@@ -393,11 +487,20 @@ const loadDlq = useCallback(async () => {
     return;
   }
 
+  const endpointId = dashboardState.endpoint_id;
+
+  if (!endpointId) {
+    setDlqItems([]);
+    return;
+  }
+
   setDlqLoading(true);
   setDlqError("");
 
   try {
-    const response = await fetch(`${API_BASE_URL}/api/chart/dlq?limit=50`);
+    const response = await fetch(
+      `${DASHBOARD_URL}/api/chart/dlq?limit=50&endpoint_id=${encodeURIComponent(endpointId)}`,
+    );
 
     if (!response.ok) {
       throw new Error(`Unable to load DLQ (${response.status})`);
@@ -416,14 +519,14 @@ const loadDlq = useCallback(async () => {
   } finally {
     setDlqLoading(false);
   }
-}, [dashboardState.source]);
+}, [dashboardState.source, dashboardState.endpoint_id]);
 
 const replayDeadLetter = async (deliveryId) => {
   setReplayingDeliveryId(deliveryId);
   setDlqError("");
 
   try {
-    const response = await fetch(`${API_BASE_URL}/replay`, {
+    const response = await fetch(`${API_URL}/replay`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -466,7 +569,7 @@ const replaySelectedDeadLetters = async () => {
   setDlqError("");
 
   try {
-    const response = await fetch(`${API_BASE_URL}/replay`, {
+    const response = await fetch(`${API_URL}/replay`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -504,12 +607,13 @@ const replayAllDeadLetters = async () => {
   setDlqError("");
 
   try {
-    const response = await fetch(`${API_BASE_URL}/replay`, {
+    const response = await fetch(`${API_URL}/replay`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
+        endpoint_id: dashboardState.endpoint_id,
         limit: 50,
       }),
     });
@@ -553,11 +657,55 @@ useEffect(() => {
   };
 }, [loadDlq]);
 
+useEffect(() => {
+  if (dashboardState.source !== "live") {
+    return undefined;
+  }
+
+  let cancelled = false;
+
+  const loadSignatures = async () => {
+    try {
+      const response = await fetch(`${SIMULATOR_URL}/simulator/deliveries?limit=200`);
+
+      if (!response.ok) {
+        return;
+      }
+
+      const received = await response.json();
+
+      if (cancelled || !Array.isArray(received)) {
+        return;
+      }
+
+      setSignatures((previous) => {
+        const next = { ...previous };
+        for (const item of received) {
+          if (item.attempt_id) {
+            next[item.attempt_id] = item;
+          }
+        }
+        return next;
+      });
+    } catch {
+      // The badge is optional; the timeline still renders without it.
+    }
+  };
+
+  void loadSignatures();
+  const timer = window.setInterval(() => void loadSignatures(), 2000);
+
+  return () => {
+    cancelled = true;
+    window.clearInterval(timer);
+  };
+}, [dashboardState.source]);
+
   const loadMultiEndpointData = async () => {
     setMultiEndpointLoading(true);
     setMultiEndpointError("");
     try {
-      const response = await fetch(`${API_BASE_URL}/api/chart/benchmark/multi-endpoint`);
+      const response = await fetch(`${DASHBOARD_URL}/api/chart/benchmark/multi-endpoint`);
       const payload = await response.json();
       if (!response.ok) {
         const detail =
@@ -624,13 +772,13 @@ const radarData = useMemo(() => {
   const weights = dashboardState.eri_weights ?? {};
 
   const metrics = [
-    { key: "success_rate", label: "Success Rate" },
+    { key: "success_rate", label: "Success" },
     { key: "latency", label: "Latency" },
-    { key: "consecutive_failures", label: "Consecutive Failures" },
-    { key: "timeout_rate", label: "Timeout Rate" },
+    { key: "consecutive_failures", label: "Failure streak" },
+    { key: "timeout_rate", label: "Timeouts" },
     { key: "http_5xx_rate", label: "HTTP 5xx" },
-    { key: "queue_depth", label: "Queue Depth" },
-    { key: "recovery_trend", label: "Recovery Trend" },
+    { key: "queue_depth", label: "Queue depth" },
+    { key: "recovery_trend", label: "Recovery trend" },
   ];
 
   return metrics.map((metric) => ({
@@ -739,6 +887,23 @@ const thresholdBands = useMemo(() => {
         </div>
       </header>
 
+      {(dashboardState.policy_tier ?? 1) > 1 && (
+        <section className="fallback-banner" role="status">
+          <div>
+            <strong>
+              {dashboardState.policy_tier === 2
+                ? "⚠ Policy fallback: Tier 2 — cached policy"
+                : "⚠ Policy fallback: Tier 3 — static defaults"}
+            </strong>
+            <span>
+              {dashboardState.policy_tier === 2
+                ? "AEDE is unavailable. The Dispatcher keeps serving the last policy AEDE produced until it expires."
+                : "AEDE is unavailable and the cached policy has expired. Delivery continues on static Strategy A defaults."}
+            </span>
+          </div>
+        </section>
+      )}
+
       {dashboardState.state === "QUARANTINED" && (
         <section className="quarantine-banner" role="alert">
           <div>
@@ -757,7 +922,7 @@ const thresholdBands = useMemo(() => {
                 return;
               }
               try {
-                const response = await fetch(`${API_BASE_URL}/endpoints/${encodeURIComponent(endpointId)}/restore`, {
+                const response = await fetch(`${API_URL}/endpoints/${encodeURIComponent(endpointId)}/restore`, {
                   method: "POST",
                 });
                 const payload = await response.json();
@@ -774,8 +939,8 @@ const thresholdBands = useMemo(() => {
                     id: `restore-${Date.now()}`,
                     state: "RESTORE_ERROR",
                     endpointId,
-                    eri: dashboardState.eri,
-                    failures: "--",
+                    eri: formatEri(dashboardState.eri),
+                    successRate: "--",
                     title: "Restore request failed",
                     message: error instanceof Error ? error.message : "Unable to restore endpoint.",
                   },
@@ -795,7 +960,7 @@ const thresholdBands = useMemo(() => {
             <div className={`alert-toast ${alert.state === "QUARANTINED" ? "quarantine" : "unstable"}`} key={alert.id}>
               <div className="alert-toast-title">{alert.title}</div>
               <div>Endpoint {alert.endpointId} {alert.state === "QUARANTINED" ? "has been quarantined." : "is unstable."}</div>
-              <div>ERI: {alert.eri} | Consecutive failures: {alert.failures}</div>
+              <div>ERI: {alert.eri} | Success rate: {alert.successRate}</div>
               {alert.message && <div className="alert-toast-message">{alert.message}</div>}
               <div className="alert-toast-actions">
                 <button
@@ -885,7 +1050,7 @@ const thresholdBands = useMemo(() => {
           </div>
 
           <div className="eri-value">
-            {dashboardState.eri}
+            {formatEri(dashboardState.eri)}
             <span className="eri-scale">/ 100</span>
           </div>
 
@@ -925,7 +1090,9 @@ const thresholdBands = useMemo(() => {
       </h2>
 
       <p className="card-description">
-        Configure the dashboard demo telemetry
+        {dashboardState.source === "synthetic"
+          ? "Configure the synthetic demo telemetry"
+          : "Configure the endpoint simulator"}
       </p>
     </div>
   </div>
@@ -989,17 +1156,11 @@ const thresholdBands = useMemo(() => {
           setFailureMode(event.target.value)
         }
       >
-        <option value="mixed">
-          Mixed
-        </option>
-
-        <option value="http_500">
-          HTTP 500
-        </option>
-
-        <option value="timeout">
-          Timeout
-        </option>
+        {FAULT_MODES.map((mode) => (
+          <option key={mode.value} value={mode.value}>
+            {mode.label}
+          </option>
+        ))}
       </select>
     </label>
 
@@ -1011,6 +1172,8 @@ const thresholdBands = useMemo(() => {
     >
       Apply fault profile
     </button>
+
+    {faultError && <div className="dlq-error">{faultError}</div>}
 
 <div className="scenario-presets">
   <p className="fault-label">Scenario presets</p>
@@ -1029,6 +1192,23 @@ const thresholdBands = useMemo(() => {
 </button>
     ))}
   </div>
+
+  {dashboardState.source === "live" && (
+    <div className="aede-switch">
+      <span>
+        Policy engine (AEDE):{" "}
+        <strong>{aedeAvailable ? "available" : "simulated outage"}</strong>
+      </span>
+      <button
+        type="button"
+        className={aedeAvailable ? "aede-switch-stop" : "aede-switch-start"}
+        onClick={() => void setAedeAvailability(!aedeAvailable)}
+      >
+        {aedeAvailable ? "Simulate AEDE outage" : "Bring AEDE back"}
+      </button>
+      {aedeSwitchError && <div className="dlq-error">{aedeSwitchError}</div>}
+    </div>
+  )}
 
   <p className="active-scenario" aria-live="polite">
     Active scenario:{" "}
@@ -1188,17 +1368,17 @@ const thresholdBands = useMemo(() => {
   {[
     {
       key: "successRate",
-      label: "Success Rate",
+      label: "Success score",
       color: "#22c55e",
     },
     {
       key: "timeoutRate",
-      label: "Timeout Rate",
+      label: "Timeout score",
       color: "#f97316",
     },
     {
       key: "consecutiveFailures",
-      label: "Consecutive Failures",
+      label: "Failure-streak score",
       color: "#ef4444",
     },
   ].map((metric) => (
@@ -1242,7 +1422,7 @@ const thresholdBands = useMemo(() => {
     <div>
       <h2 className="card-title">ERI Sub-Metrics</h2>
       <p className="card-description">
-        Normalized reliability scores across seven factors
+        Health score per ERI factor (outer edge = healthy)
       </p>
     </div>
   </div>
@@ -1270,6 +1450,7 @@ const thresholdBands = useMemo(() => {
             stroke="#3b82f6"
             fill="#3b82f6"
             fillOpacity={0.3}
+            isAnimationActive={false}
           />
 
           <Tooltip
@@ -1351,14 +1532,24 @@ const thresholdBands = useMemo(() => {
         </span>
       )}
 
-      {event.signature && (
-  <span
-    className="signature-badge"
-    title={`X-Relay-Signature: ${event.signature}`}
-  >
-    X-Relay-Signature: {event.signature}
-  </span>
-)}
+      {(() => {
+        const received = signatures[event.attempt_id];
+        const signature = event.signature ?? received?.signature;
+        if (!signature) {
+          return null;
+        }
+        const status = received?.signature_status;
+        return (
+          <span
+            className={`signature-badge${status === "invalid" ? " signature-invalid" : ""}`}
+            title={`X-Relay-Signature: ${signature}`}
+          >
+            {status === "verified" && "✓ verified · "}
+            {status === "invalid" && "✗ invalid · "}
+            X-Relay-Signature: {signature}
+          </span>
+        );
+      })()}
 
       {event.error_message && (
         <span className="timeline-error">

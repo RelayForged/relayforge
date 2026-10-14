@@ -53,7 +53,12 @@ class IsolationAction(str, Enum):
     """Reduce parallel deliveries to this endpoint."""
 
     PAUSE = "PAUSE"
-    """Suspend new deliveries. Queue incoming events."""
+    """
+    Throttled delivery for an UNSTABLE endpoint: one at a time under the
+    policy's long backoff. Not a stop -- the attempts that still go out are
+    the only evidence the endpoint can recover on (ADR 0022). Only
+    QUARANTINE stops HTTP.
+    """
 
     QUARANTINE = "QUARANTINE"
     """Full isolation. No delivery attempts. Events preserved for replay."""

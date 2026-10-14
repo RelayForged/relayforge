@@ -61,6 +61,15 @@ class EndpointStateStore:
         self._policy_evaluations: Dict[str, List[PolicyEvaluation]] = {}
         self._policies: Dict[str, DeliveryPolicy] = {}
         self._explainability_records: Dict[str, List[ExplainabilityRecord]] = {}
+        # Serving tier per endpoint, from the Dispatcher's policy_tier events
+        # (ADR 0024). Absent means Tier 1: only departures are announced.
+        self._policy_tiers: Dict[str, int] = {}
+
+    def record_policy_tier(self, endpoint_id: str, tier: int) -> None:
+        self._policy_tiers[endpoint_id] = tier
+
+    def get_policy_tier(self, endpoint_id: str) -> int:
+        return self._policy_tiers.get(endpoint_id, 1)
 
     def record_evaluation(
         self,
@@ -154,6 +163,7 @@ class EndpointStateStore:
         self._policy_evaluations.clear()
         self._policies.clear()
         self._explainability_records.clear()
+        self._policy_tiers.clear()
 
 
 class BenchmarkResultStore:

@@ -13,6 +13,11 @@
 > verified on the compose stack. Status changes are marked **[Built]**. The task sections below
 > keep their original wording as the specification; where the build differs, a **[Built]** note
 > says how.
+>
+> **Revision 3 (2026-10-14)**: Person C's dashboard is merged (PR #23). Person B fixed it against
+> the live stack and prepared the demo on `feature/demo-readiness`: UI served from the dashboard
+> container, ADRs 0022–0024, smoke check and reset script. Run order and recovery steps are in
+> `demo/RUNBOOK.md`.
 
 ---
 
@@ -20,24 +25,30 @@
 
 | Task | Backend (Person B / A) | Frontend (Person C) |
 |---|---|---|
-| T1 ERI chart bands | ✅ `thresholds`, `state` and `sub_scores` are in the live payload | ❌ Not started |
-| T2 Scenario presets | ✅ 8 presets, simulator modes, auto-publisher | ❌ Not started |
-| T3 Radar chart | ✅ `/ws` streams live AEDE data | ❌ Not started |
-| T4 Benchmark tab | ✅ `POST /api/chart/benchmark/run` with computed `comparison` | ❌ Not started |
-| T5 Replay + DLQ | ✅ ReplayManager, `POST /replay`, `GET /api/chart/dlq`, SDK (ADR 0021) | ❌ Not started |
-| T6 State journal | ✅ `reason` and `triggered_thresholds` are in the payload | ❌ Not started |
+| T1 ERI chart bands | ✅ `thresholds`, `state` and `sub_scores` are in the live payload | ✅ Done |
+| T2 Scenario presets | ✅ 8 presets, simulator modes, auto-publisher | ✅ Done; Fault Injection drives the real simulator |
+| T3 Radar chart | ✅ `/ws` streams live AEDE data | ✅ Done |
+| T4 Benchmark tab | ✅ `POST /api/chart/benchmark/run` with computed `comparison` | ✅ Done (no MTTR) |
+| T5 Replay + DLQ | ✅ ReplayManager, `POST /replay`, `GET /api/chart/dlq`, SDK (ADR 0021) | ✅ Done; scoped to the current endpoint |
+| T6 State journal | ✅ `reason` and `triggered_thresholds` are in the payload | ✅ Done |
 | T7 Prometheus + Grafana | ❌ Not started (Person A's metrics module comes first) | — |
-| T8 Multi-endpoint | ✅ `GET /api/chart/benchmark/multi-endpoint` | ❌ Not started |
-| T9 HMAC surface | ✅ Signing on in compose; simulator verifies and records | ❌ Not started |
+| T8 Multi-endpoint | ✅ `GET /api/chart/benchmark/multi-endpoint` | ✅ Done |
+| T9 HMAC surface | ✅ Signing on in compose; simulator verifies and records | ✅ Done; badge shows the simulator's verification |
 | T10 Kubernetes | ❌ Not started (Person A) | — |
-| T11 Quarantine alerts | ✅ Restore fixed (ADR 0020) | ❌ Not started |
+| T11 Quarantine alerts | ✅ Restore fixed (ADR 0020) | ✅ Done |
 | T12 Delivery adapter | ✅ Done | — |
 | T13 Typed events | ❌ Not started (Person A's `base.py` comes first) | — |
 | T14 Repeat endpoint registration (optional) | ❌ Open question for Person A. Not a bug fix; nothing depends on it | — |
+| Policy fallback demo (MVP checklist) | ✅ Simulated AEDE outage, tier on the feed (ADR 0024) | ✅ Switch and tier banner |
 
-Still open and unassigned: explainability records and the policy cache are in memory only; the
-frontend WebSocket URL points at port 8000 instead of 8090; nothing in compose serves the React
-build. ADR 0020 and ADR 0021 are Proposed and need Person B's sign-off.
+Still open and unassigned: explainability records and the policy cache are in memory only (the
+dashboard rebuilds its charts from the policy topic on start, but AEDE's own state is lost when the
+dispatcher restarts). ADR 0020 and ADR 0021 are Proposed and need Person B's sign-off.
+
+**[Built] Found while preparing the demo (2026-10-14):**
+- **UNSTABLE could never recover (ADR 0022).** UNSTABLE's policy is PAUSE, and the dispatcher sent no HTTP under PAUSE, so no telemetry arrived and the ERI could not move. Only QUARANTINE stops HTTP now, which matches the benchmark.
+- **The compose quarantine threshold was 45**, not the research value 30. That left UNSTABLE a 10-point band the live ERI jumped across. Compose now uses 30, and the Instability preset runs at 50% errors.
+- **RECOVERING lasted one probe.** It now needs 25 observations on the live stack (ADR 0023); the benchmark is unchanged.
 
 ---
 
@@ -802,22 +813,20 @@ Day 8:  • Buffer: End-to-end rehearsal, edge-case fixes, and timing optimizati
 
 | Minute | Step | Role Executing | What's visible |
 |---|---|---|---|
-| 0:00 | `docker compose up` → open browser → services panel | **Person A** | All services green: Kafka, PG, Redis, API, Dispatcher, Simulator, Dashboard today; Prometheus and Grafana once T7 lands |
-| 1:00 | Click **▶ Normal Operation** | **Person C** | ERI=100, AVAILABLE badge, Timeline shows green ✅ rows, Radar full, Signature header visible |
-| 2:00 | Click **⚠ Early Degradation** | **Person C** | ERI line enters yellow band → OBSERVED_DEGRADATION, Policy: "reduced concurrency" |
-| 3:30 | Click **🔴 Instability** | **Person C** | ERI enters orange band → UNSTABLE, backoff delay visible in policy panel, alert toast |
-| 5:00 | Click **💀 Full Outage** | **Person C** | ERI collapses → 🚨 QUARANTINE ALERT toast → Timeline shows no new HTTP rows → DLQ panel fills |
-| 6:30 | Click **🔄 Recovery** | **Person C** | RECOVERING probe → ERI back above the recovery threshold (80) → AVAILABLE. This takes about 3 s today |
-| 7:00 | Click **[Replay All]** in DLQ panel | **Person B** | Events requeue, Timeline shows replayed deliveries succeeding |
-| 7:30 | Switch to Grafana tab | **Person A** | Real-time ERI gauge, retry histogram, state transition markers |
-| 8:00 | Switch to Benchmark tab | **Person B** | Click "Run Scenario 10 — all strategies" → grouped bar chart renders: C cuts wasted retries (428 vs 930 for A and 626 for B); success rate is equal across strategies |
-| 9:00 | Switch to Multi-Endpoint tab | **Person B** | Show throughput bars: the healthy neighbor is starved under Strategy A (1.39 events/s) and protected under Strategy C (16.58 events/s) |
-| 9:30 | Show State Journal panel | **Person C** | Full journey scrollable: AVAILABLE → DEGRADED → UNSTABLE → QUARANTINED → RECOVERING → AVAILABLE |
+| 0:00 | `demo/reset.ps1` beforehand; open `http://localhost:8090` | **Person A** | Dashboard connected, live source, endpoint AVAILABLE |
+| 1:00 | Click **▶ Normal** | **Person C** | ERI 100, AVAILABLE, timeline of ✅ rows with "✓ verified" signature badges, full radar |
+| 2:00 | Click **⚠ Early Degradation** | **Person C** | ERI dips into the yellow band, OBSERVED_DEGRADATION, policy "reduced concurrency" |
+| 3:00 | Click **🔴 Instability** | **Person C** | ERI in the orange band, UNSTABLE, alert toast, longer backoff in the policy panel |
+| 4:00 | Click **💀 Full Outage** | **Person C** | ERI collapses, 🚨 quarantine banner, no new HTTP rows, DLQ panel fills |
+| 5:00 | Click **🔄 Recovery** | **Person C** | RECOVERING for about 10 s while 25 good probes arrive, then AVAILABLE |
+| 5:45 | Click **Replay All** in the DLQ panel | **Person B** | Parked deliveries go out again and succeed; original rows unchanged |
+| 6:30 | Click **Simulate AEDE outage** | **Person B** | Amber banner: Tier 2 cached policy at once, Tier 3 static defaults after 30 s; deliveries keep flowing. Click **Bring AEDE back**: banner clears |
+| 7:30 | Benchmark tab, **Run all strategies** | **Person B** | Wasted retries: C cuts them by about 80% against A and 67% against B with the same success rate |
+| 8:30 | Multi-Endpoint tab | **Person B** | The healthy neighbour is starved under Strategy A (1.39 events/s) and protected under Strategy C (16.58 events/s) |
+| 9:15 | State Transition Journal | **Person C** | AVAILABLE → DEGRADED → UNSTABLE → QUARANTINED → RECOVERING → AVAILABLE |
+| (opt.) | Grafana | **Person A** | Only if T7 has landed |
 
-**[Built]** Notes for rehearsal:
-- UNSTABLE appears at 3:30 from the Instability preset. Full Outage on its own skips it.
-- The 7:30 Grafana step depends on T7, which is not started.
-- No frontend work for these steps exists yet; every step from 1:00 on depends on Person C's UI.
+**[Built]** Notes for rehearsal: see `demo/RUNBOOK.md` for what to say when a step misbehaves.
 
 ---
 

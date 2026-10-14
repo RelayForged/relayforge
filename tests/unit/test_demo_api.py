@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 from fastapi import FastAPI
@@ -125,7 +126,7 @@ def test_activate_configures_simulator_and_starts_publishing(harness) -> None:
     body = res.json()
     assert body["active_scenario"] == "instability"
     assert body["publishing"] is True
-    assert body["simulator"] == {"mode": "http_error", "rate": 0.75, "latency_ms": 0}
+    assert body["simulator"] == {"mode": "http_error", "rate": 0.5, "latency_ms": 0}
     assert harness.calls["simulator"] == [body["simulator"]]
 
     endpoint = harness.endpoints.endpoints[0]
@@ -276,3 +277,35 @@ async def test_a_demo_target_created_with_a_random_id_is_reused(monkeypatch) -> 
     assert endpoint.endpoint_id == older.endpoint_id
     assert subscription.endpoint_id == older.endpoint_id
     assert len(endpoints.endpoints) == 1
+
+
+def test_aede_switch_sends_the_dispatcher_a_control_message(harness, monkeypatch) -> None:
+    sent = []
+
+    async def fake_publish(topic, key, value):
+        sent.append((topic, key, json.loads(value)))
+
+    monkeypatch.setattr(demo, "publish", fake_publish)
+
+    down = harness.post("/demo/aede", json={"available": False})
+    up = harness.post("/demo/aede", json={"available": True})
+
+    assert down.status_code == 200 and down.json()["aede_available"] is False
+    assert up.json()["aede_available"] is True
+    assert [s[2] for s in sent] == [
+        {"action": "aede_availability", "available": False},
+        {"action": "aede_availability", "available": True},
+    ]
+    assert {s[0] for s in sent} == {"events.internal.endpoint"}
+
+
+def test_aede_switch_reports_a_failed_publish(harness, monkeypatch) -> None:
+    async def broken(topic, key, value):
+        raise RuntimeError("kafka down")
+
+    monkeypatch.setattr(demo, "publish", broken)
+
+    response = harness.post("/demo/aede", json={"available": False})
+
+    assert response.status_code == 503
+    assert harness.get("/demo/status").json()["aede_available"] is True

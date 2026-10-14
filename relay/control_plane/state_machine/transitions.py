@@ -45,7 +45,13 @@ def next_state(
     elif current == EndpointState.RECOVERING:
         if score < thresholds.quarantine_threshold:
             return EndpointState.QUARANTINED
-        if score > thresholds.recovery_threshold:
+        # After an operator restore the window starts empty (ADR 0020), and
+        # one good probe scores ~100. The minimum sample count makes recovery
+        # rest on more than that one probe (ADR 0023).
+        if (
+            score > thresholds.recovery_threshold
+            and eri.window_size >= thresholds.recovery_min_samples
+        ):
             return EndpointState.AVAILABLE
         return EndpointState.RECOVERING
 

@@ -10,6 +10,7 @@ Demonstrates the full closed-loop life cycle of Relay:
 7. Simulator recovery + Admin restoration -> probe delivery in RECOVERING state -> hysteresis-backed return to AVAILABLE.
 """
 
+import random
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 import pytest
@@ -100,6 +101,12 @@ def make_delivery(endpoint_id: str) -> Delivery:
 @pytest.mark.asyncio
 async def test_end_to_end_adaptive_lifecycle():
     """Execute complete end-to-end lifecycle from nominal to degradation, quarantine, and recovery."""
+    # The simulator draws failures from the global `random`. Unseeded, a
+    # 70% failure rate over 12 attempts sometimes left the endpoint
+    # AVAILABLE and failed Phase 2 (about 1 run in 6). Seeded, the run is
+    # the same every time.
+    random.seed(20261014)
+
     # 1. Setup Simulator State
     sim_state = SimulatorState()
     sim_state.config = SimulatorConfig(mode=FailureMode.HTTP_ERROR, rate=0.0)

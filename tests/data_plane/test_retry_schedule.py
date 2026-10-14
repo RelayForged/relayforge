@@ -195,10 +195,8 @@ async def test_success_marks_delivery_success_and_publishes_nothing(
     assert captured_publishes == []
 
 
-@pytest.mark.parametrize(
-    "action", [IsolationAction.PAUSE, IsolationAction.QUARANTINE]
-)
-async def test_pause_and_quarantine_leave_delivery_pending_and_durable(
+@pytest.mark.parametrize("action", [IsolationAction.QUARANTINE])
+async def test_quarantine_leaves_delivery_pending_and_durable(
     action, deliveries, attempts, captured_publishes
 ):
     """Must not mark FAILED -- that would drop work the policy only deferred."""
@@ -217,6 +215,27 @@ async def test_pause_and_quarantine_leave_delivery_pending_and_durable(
     assert deliveries.only().status == "PENDING"
     assert captured_publishes == []
     assert attempts.numbers() == []
+
+
+async def test_pause_schedules_the_retry(deliveries, attempts, captured_publishes):
+    """PAUSE throttles through the policy's backoff; it does not stop (ADR 0022)."""
+    manager = RetryManager(deliveries=deliveries, attempts=attempts)
+    event = make_event()
+    delivery = Delivery(
+        event_id=event.event_id, subscription_id="sub-1", endpoint_id="endpoint-1"
+    )
+    await deliveries.save(delivery)
+
+    work = await manager.handle(
+        completed_attempt(delivery, 1),
+        delivery,
+        make_policy(isolation=IsolationAction.PAUSE),
+        event,
+    )
+
+    assert work is not None
+    assert work.attempt.attempt_number == 2
+    assert len(captured_publishes) == 1
 
 
 async def test_deadline_seconds_overrides_remaining_retries(

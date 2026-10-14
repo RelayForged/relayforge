@@ -66,6 +66,10 @@ class StateMachineThresholds(BaseModel):
     unstable_recovery_threshold: float = Field(ge=0.0, le=100.0)
     quarantine_threshold: float = Field(ge=0.0, le=100.0)
     recovery_threshold: float = Field(ge=0.0, le=100.0)
+    # Probation (ADR 0023): RECOVERING promotes to AVAILABLE only once the
+    # ERI window holds at least this many observations. 0 disables it, which
+    # is the benchmark's model.
+    recovery_min_samples: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def validate_hysteresis(self) -> "StateMachineThresholds":
