@@ -1602,3 +1602,44 @@
   color: #166534;
   font-size: 0.82rem;
 }
+
+.state-behaviour {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-left: 3px solid #94a3b8;
+  border-radius: 6px;
+  background: #f8fafc;
+  font-size: 0.84rem;
+  line-height: 1.45;
+  color: #334155;
+}
+
+.state-behaviour-summary {
+  margin: 0 0 6px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.state-behaviour-heading {
+  margin: 0 0 4px;
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.state-behaviour ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.state-behaviour li + li {
+  margin-top: 3px;
+}
+
+.state-behaviour.status-available { border-left-color: #22c55e; background: #f8fafc; color: #334155; }
+.state-behaviour.status-degraded { border-left-color: #eab308; background: #f8fafc; color: #334155; }
+.state-behaviour.status-unstable { border-left-color: #f97316; background: #f8fafc; color: #334155; }
+.state-behaviour.status-quarantined { border-left-color: #ef4444; background: #f8fafc; color: #334155; }
+.state-behaviour.status-recovering { border-left-color: #3b82f6; background: #f8fafc; color: #334155; }

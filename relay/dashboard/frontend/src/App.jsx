@@ -21,7 +21,7 @@ import BenchmarkTab from "./BenchmarkTab";
 import HelpTip from "./HelpTip";
 import NoisyNeighbour from "./NoisyNeighbour";
 import ScenarioLab from "./ScenarioLab";
-import { SCENARIO_GUIDE } from "./glossary";
+import { SCENARIO_GUIDE, STATE_BEHAVIOUR } from "./glossary";
 import {
   API_URL,
   DASHBOARD_URL,
@@ -1076,6 +1076,21 @@ const thresholdBands = useMemo(() => {
           </div>
           {restoreNotice && dashboardState.state !== "QUARANTINED" && (
             <p className="restore-notice">{restoreNotice}</p>
+          )}
+          {STATE_BEHAVIOUR[dashboardState.state] && (
+            <div className={`state-behaviour ${stateClass}`}>
+              <p className="state-behaviour-summary">
+                {STATE_BEHAVIOUR[dashboardState.state].summary}
+              </p>
+              {dashboardState.state !== "AVAILABLE" && (
+                <p className="state-behaviour-heading">Compared with a healthy endpoint:</p>
+              )}
+              <ul>
+                {STATE_BEHAVIOUR[dashboardState.state].points.map((point) => (
+                  <li key={point}>{point}</li>
+                ))}
+              </ul>
+            </div>
           )}
         </article>
 

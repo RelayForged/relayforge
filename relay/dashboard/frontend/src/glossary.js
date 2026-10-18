@@ -212,3 +212,53 @@ export const SCENARIO_GUIDE = {
     watch: "Failures with no HTTP status; the endpoint is isolated just like a full outage.",
   },
 };
+
+// What Relay does differently in each endpoint state, compared with a
+// healthy (AVAILABLE) endpoint. Numbers are the policies AEDE synthesizes
+// (relay/control_plane/aede/synthesizer.py).
+export const STATE_BEHAVIOUR = {
+  AVAILABLE: {
+    summary: "Healthy. Relay delivers normally; this is the baseline the other states are compared with.",
+    points: [
+      "Failed deliveries are retried up to 10 times, starting 2 s later and backing off to at most 60 s.",
+      "AEDE allows up to 10 deliveries in flight at once.",
+      "No one is alerted.",
+    ],
+  },
+  OBSERVED_DEGRADATION: {
+    summary: "Some deliveries are failing or slow. Relay eases off so it does not add to the problem.",
+    points: [
+      "Retries wait longer: first after 5 s instead of 2 s, backing off to 120 s instead of 60 s.",
+      "Fewer retries: up to 8 instead of 10.",
+      "AEDE asks for at most 3 in flight instead of 10 (not yet enforced by the live dispatcher).",
+      "Logged as a warning; no one is paged yet.",
+    ],
+  },
+  UNSTABLE: {
+    summary: "Failures are frequent. Relay keeps delivering, but carefully, so the struggling server gets room to recover.",
+    points: [
+      "Retries wait much longer: first after 15 s instead of 2 s, backing off to 5 minutes.",
+      "Only 5 retries instead of 10, so less effort is wasted on doomed requests.",
+      "AEDE asks for one delivery at a time instead of 10 (not yet enforced by the live dispatcher).",
+      "An administrator is notified.",
+    ],
+  },
+  QUARANTINED: {
+    summary: "Failing badly. Relay stops sending to this endpoint altogether.",
+    points: [
+      "No requests are sent: new events are held, not delivered and not dropped.",
+      "Held events wait in the dead letter queue and are resent once the endpoint recovers.",
+      "After a timed hold (30 s here, doubling each time it is still down) Relay re-checks it by itself; an operator can also bring it back straight away.",
+      "Critical alert to an administrator.",
+    ],
+  },
+  RECOVERING: {
+    summary: "Back after a fix, on probation. Relay delivers again but does not trust the endpoint yet.",
+    points: [
+      "Its score starts fresh: only deliveries since the restore count.",
+      "It must succeed 25 times before it is AVAILABLE again; a bad score sends it straight back to quarantine.",
+      "Retries are cautious: first after 10 s, up to 6 times.",
+      "AEDE asks for one delivery at a time while it proves itself (not yet enforced by the live dispatcher).",
+    ],
+  },
+};
