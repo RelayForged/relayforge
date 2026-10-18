@@ -3,6 +3,11 @@
 // it matters. Keep each one short enough to read in ten seconds.
 
 export const GLOSSARY = {
+  endpoint_picker: {
+    title: "Which endpoint you are looking at",
+    body:
+      "Every customer webhook URL is a separate endpoint with its own health score, state and history. The dashboard shows one at a time; pick it here. The dot shows each endpoint's current state, so you can see another one get quarantined without switching.",
+  },
   endpoint_state: {
     title: "Endpoint state",
     body:

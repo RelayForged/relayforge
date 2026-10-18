@@ -1643,3 +1643,62 @@
 .state-behaviour.status-unstable { border-left-color: #f97316; background: #f8fafc; color: #334155; }
 .state-behaviour.status-quarantined { border-left-color: #ef4444; background: #f8fafc; color: #334155; }
 .state-behaviour.status-recovering { border-left-color: #3b82f6; background: #f8fafc; color: #334155; }
+
+/* Endpoint picker */
+.endpoint-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: -6px 0 18px;
+}
+
+.endpoint-picker-label {
+  color: #475569;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.endpoint-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #0f172a;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.endpoint-chip.active {
+  border-color: #0f172a;
+  box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.12);
+  font-weight: 700;
+}
+
+.endpoint-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+
+.endpoint-chip-state {
+  color: #64748b;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.fault-elsewhere {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #fef3c7;
+  color: #78350f;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}

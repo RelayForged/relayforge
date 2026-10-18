@@ -3,6 +3,7 @@
 Provides read-only endpoints consumed by Person C's React dashboard.
 """
 import asyncio
+import logging
 from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Dict, List, Optional
@@ -41,6 +42,8 @@ from relay.api.chart.stores import BenchmarkRun, benchmark_store, state_store
 
 BENCHMARK_STRATEGIES = ("STRATEGY_A", "STRATEGY_B", "STRATEGY_C")
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/chart", tags=["chart-data"])
 
 
@@ -50,21 +53,39 @@ router = APIRouter(prefix="/api/chart", tags=["chart-data"])
     summary="List all tracked endpoints and their current state",
 )
 async def list_endpoints() -> EndpointListResponse:
-    """Return all known endpoints with current state and latest ERI score."""
+    """
+    Return all known endpoints with current state and latest ERI score, plus
+    each endpoint's target URL and owner so the dashboard can name it.
+    """
     endpoint_ids = state_store.list_endpoints()
     summaries = []
     for ep_id in endpoint_ids:
         state = state_store.get_state(ep_id)
         last_eval = state_store.get_latest_evaluation(ep_id)
+        registered = await _registered_endpoint(ep_id)
         summaries.append(
             EndpointSummary(
                 endpoint_id=ep_id,
                 state=state.value if state else "UNKNOWN",
                 eri_score=last_eval.eri_score if last_eval else None,
                 last_evaluated_at=state_store.get_last_evaluated_at(ep_id),
+                target_url=registered.target_url if registered else None,
+                owner_id=registered.owner_id if registered else None,
             )
         )
     return EndpointListResponse(endpoints=summaries)
+
+
+async def _registered_endpoint(endpoint_id: str):
+    """The endpoint's registry row, or None if it is unknown or the lookup fails."""
+    try:
+        # Imported here so the chart router still loads where no database is configured.
+        from relay.infrastructure.persistence.endpoint_repository import EndpointRepository
+
+        return await EndpointRepository().get_by_id(endpoint_id)
+    except Exception:
+        logger.warning("Endpoint lookup failed for endpoint_id=%s", endpoint_id, exc_info=True)
+        return None
 
 
 @router.get(

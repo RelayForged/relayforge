@@ -34,3 +34,34 @@ export const FAULT_MODES = [
   { value: "slow", label: "Slow (latency only)", simulator: "slow", synthetic: null },
   { value: "success", label: "Healthy", simulator: "success", synthetic: null },
 ];
+
+// Friendly names for the endpoints the demos use. Anything else is shown
+// by its host and a short id.
+const KNOWN_ENDPOINTS = {
+  simulator: "Demo simulator (Demo 1)",
+  "store-acme": "Acme Store (Demo 2)",
+  "store-bluebird": "Bluebird Books (Demo 2)",
+};
+
+export function endpointHost(targetUrl) {
+  if (!targetUrl) {
+    return null;
+  }
+  try {
+    return new URL(targetUrl).hostname;
+  } catch {
+    return null;
+  }
+}
+
+export function endpointLabel(endpoint) {
+  if (!endpoint) {
+    return "this endpoint";
+  }
+  const host = endpointHost(endpoint.target_url);
+  if (host && KNOWN_ENDPOINTS[host]) {
+    return KNOWN_ENDPOINTS[host];
+  }
+  const shortId = String(endpoint.endpoint_id ?? "").slice(0, 8);
+  return host ? `${host} · ${shortId}` : shortId;
+}

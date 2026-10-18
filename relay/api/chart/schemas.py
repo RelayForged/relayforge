@@ -98,6 +98,9 @@ class EndpointSummary(BaseModel):
     state: str
     eri_score: Optional[float] = None
     last_evaluated_at: Optional[str] = None
+    # From the endpoint registry, so the dashboard can name the endpoint.
+    target_url: Optional[str] = None
+    owner_id: Optional[str] = None
 
 
 class EndpointListResponse(BaseModel):

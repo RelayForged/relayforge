@@ -28,6 +28,8 @@ import {
   DASHBOARD_WS_URL,
   FAULT_MODES,
   SIMULATOR_URL,
+  endpointHost,
+  endpointLabel,
 } from "./config";
 
 const INITIAL_STATE = {
@@ -47,9 +49,21 @@ const INITIAL_STATE = {
   },
 };
 
-function getWebSocketUrl() {
-  return DASHBOARD_WS_URL;
+// The stream is pinned to one endpoint. Without an id the server follows
+// whichever endpoint was evaluated last, which mixes endpoints together.
+function getWebSocketUrl(endpointId) {
+  return endpointId
+    ? `${DASHBOARD_WS_URL}?endpoint_id=${encodeURIComponent(endpointId)}`
+    : DASHBOARD_WS_URL;
 }
+
+const STATE_DOT = {
+  AVAILABLE: "#22c55e",
+  OBSERVED_DEGRADATION: "#eab308",
+  UNSTABLE: "#f97316",
+  QUARANTINED: "#ef4444",
+  RECOVERING: "#3b82f6",
+};
 
 function formatEri(value) {
   const number = Number(value);
@@ -132,7 +146,8 @@ const [activeTab, setActiveTabState] = useState(() => {
 });
 const setActiveTab = (tab) => {
   setActiveTabState(tab);
-  window.history.replaceState(null, "", tab === "dashboard" ? window.location.pathname : `#${tab}`);
+  const base = `${window.location.pathname}${window.location.search}`;
+  window.history.replaceState(null, "", tab === "dashboard" ? base : `${base}#${tab}`);
 };
 const [dlqItems, setDlqItems] = useState([]);
 const [dlqLoading, setDlqLoading] = useState(false);
@@ -142,6 +157,53 @@ const [stateTransitions, setStateTransitions] = useState([]);
 const [selectedDlqIds, setSelectedDlqIds] = useState([]);
 const [alerts, setAlerts] = useState([]);
 const [signatures, setSignatures] = useState({});
+
+// Which endpoint the Dashboard tab shows. Chosen in the picker; until then
+// the Demo 1 simulator endpoint (see activeEndpoint below).
+const [endpoints, setEndpoints] = useState([]);
+const [selectedEndpoint, setSelectedEndpoint] = useState(
+  () => new URLSearchParams(window.location.search).get("endpoint"),
+);
+const [demoEndpointId, setDemoEndpointId] = useState(null);
+
+useEffect(() => {
+  let cancelled = false;
+  const load = async () => {
+    try {
+      const response = await fetch(`${DASHBOARD_URL}/api/chart/endpoints`);
+      if (!response.ok) {
+        return;
+      }
+      const payload = await response.json();
+      if (!cancelled) {
+        setEndpoints(payload.endpoints ?? []);
+      }
+    } catch {
+      // The picker keeps its last list; the stream itself is unaffected.
+    }
+  };
+  void load();
+  const timer = window.setInterval(() => void load(), 3000);
+  return () => {
+    cancelled = true;
+    window.clearInterval(timer);
+  };
+}, []);
+
+const activeEndpoint = useMemo(() => {
+  if (selectedEndpoint) {
+    return selectedEndpoint;
+  }
+  if (demoEndpointId) {
+    return demoEndpointId;
+  }
+  const simulator = endpoints.find((ep) => endpointHost(ep.target_url) === "simulator");
+  return simulator?.endpoint_id ?? endpoints[0]?.endpoint_id ?? null;
+}, [selectedEndpoint, demoEndpointId, endpoints]);
+
+const activeEndpointInfo = endpoints.find((ep) => ep.endpoint_id === activeEndpoint);
+const simulatorSelected =
+  !activeEndpointInfo || endpointHost(activeEndpointInfo.target_url) === "simulator";
 
 // Alerts close themselves after a while; the journal keeps the history.
 const ALERT_LIFETIME_MS = 15000;
@@ -215,7 +277,7 @@ stateAfter: explanation.state_after,
 
       setConnectionStatus("connecting");
 
-      websocket = new WebSocket(getWebSocketUrl());
+      websocket = new WebSocket(getWebSocketUrl(activeEndpoint));
 
       websocket.onopen = () => {
         websocketRef.current = websocket;
@@ -299,7 +361,7 @@ stateAfter: explanation.state_after,
 
       websocketRef.current = null;
     };
-  }, []);
+  }, [activeEndpoint]);
 
 
   useEffect(() => {
@@ -309,12 +371,31 @@ stateAfter: explanation.state_after,
         if (response.ok) {
           const status = await response.json();
           setAedeAvailable(status.aede_available ?? true);
+          setDemoEndpointId(status.endpoint_id ?? null);
         }
       } catch {
         // The switch defaults to "available"; the tier banner shows the truth.
       }
     })();
   }, []);
+
+  const selectEndpoint = (endpointId) => {
+    if (endpointId === activeEndpoint) {
+      return;
+    }
+    setSelectedEndpoint(endpointId);
+    setDashboardState(INITIAL_STATE);
+    setStateTransitions([]);
+    setAlerts([]);
+    setSignatures({});
+    setSelectedDlqIds([]);
+    setDlqItems([]);
+    setRestoreNotice("");
+    previousStateRef.current = INITIAL_STATE.state;
+    const url = new URL(window.location.href);
+    url.searchParams.set("endpoint", endpointId);
+    window.history.replaceState(null, "", url);
+  };
 
   const setAedeAvailability = async (available) => {
     setAedeSwitchError("");
@@ -1043,6 +1124,27 @@ const thresholdBands = useMemo(() => {
         </button>
       </div>
 
+      {activeTab === "dashboard" && endpoints.length > 0 && (
+        <nav className="endpoint-picker" aria-label="Endpoint">
+          <span className="endpoint-picker-label">
+            Endpoint <HelpTip term="endpoint_picker" />
+          </span>
+          {endpoints.map((ep) => (
+            <button
+              key={ep.endpoint_id}
+              type="button"
+              className={`endpoint-chip ${ep.endpoint_id === activeEndpoint ? "active" : ""}`}
+              onClick={() => selectEndpoint(ep.endpoint_id)}
+              title={ep.target_url ?? ep.endpoint_id}
+            >
+              <span className="endpoint-dot" style={{ background: STATE_DOT[ep.state] ?? "#94a3b8" }} />
+              <span className="endpoint-chip-name">{endpointLabel(ep)}</span>
+              <span className="endpoint-chip-state">{ep.state}</span>
+            </button>
+          ))}
+        </nav>
+      )}
+
       {activeTab === "dashboard" && (
         <section className="dashboard-grid">
         <article className="dashboard-card state-card">
@@ -1152,6 +1254,12 @@ const thresholdBands = useMemo(() => {
           ? "Configure the synthetic demo telemetry"
           : "Configure the endpoint simulator"}
       </p>
+      {!simulatorSelected && (
+        <p className="fault-elsewhere">
+          These controls drive the Demo 1 simulator, not {endpointLabel(activeEndpointInfo)}.
+          Demo 2 merchants are driven with payflow and by stopping their container.
+        </p>
+      )}
     </div>
   </div>
 

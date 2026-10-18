@@ -570,3 +570,43 @@ def test_multi_endpoint_trace_matches_the_summary(client) -> None:
         assert round(sum(waits) / len(waits), 1) == result["healthy"]["avg_queue_wait_ms"]
     assert by_strategy["STRATEGY_C"]["quarantined_from_event"] is not None
     assert by_strategy["STRATEGY_A"]["quarantined_from_event"] is None
+
+
+def _seed_endpoint(endpoint_id: str) -> None:
+    _populate_sample_data(endpoint_id)
+
+
+def test_endpoint_listing_names_registered_endpoints(client, monkeypatch) -> None:
+    from relay.kernel.entities.endpoint import Endpoint
+    from relay.infrastructure.persistence import endpoint_repository
+
+    registered = Endpoint(target_url="http://store-acme:8070/webhook", owner_id="payflow")
+
+    class FakeRepo:
+        async def get_by_id(self, endpoint_id):
+            return registered if endpoint_id == registered.endpoint_id else None
+
+    monkeypatch.setattr(endpoint_repository, "EndpointRepository", FakeRepo)
+    _seed_endpoint(registered.endpoint_id)
+    _seed_endpoint("unknown-endpoint")
+
+    listing = {e["endpoint_id"]: e for e in client.get("/api/chart/endpoints").json()["endpoints"]}
+
+    assert listing[registered.endpoint_id]["target_url"] == "http://store-acme:8070/webhook"
+    assert listing[registered.endpoint_id]["owner_id"] == "payflow"
+    assert listing["unknown-endpoint"]["target_url"] is None
+
+
+def test_endpoint_listing_survives_a_failed_lookup(client, monkeypatch) -> None:
+    from relay.infrastructure.persistence import endpoint_repository
+
+    class BrokenRepo:
+        async def get_by_id(self, endpoint_id):
+            raise RuntimeError("database down")
+
+    monkeypatch.setattr(endpoint_repository, "EndpointRepository", BrokenRepo)
+    _seed_endpoint("ep-1")
+
+    listing = client.get("/api/chart/endpoints").json()["endpoints"]
+
+    assert [(e["endpoint_id"], e["target_url"]) for e in listing] == [("ep-1", None)]
