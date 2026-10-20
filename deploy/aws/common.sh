@@ -12,8 +12,13 @@ export MSYS_NO_PATHCONV=1
 export AWS_PAGER=""
 export AWS_REGION="${AWS_REGION:-ap-south-1}"
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="$(cd "$HERE/../.." && pwd)"
+# With path conversion off, native Windows programs (git, aws) cannot read
+# /c/... paths. `pwd -W` gives C:/..., which they and Git Bash's tools accept.
+abs_dir() {
+  (cd "$1" && (pwd -W 2> /dev/null || pwd))
+}
+HERE="$(abs_dir "$(dirname "${BASH_SOURCE[0]}")")"
+REPO="$(abs_dir "$HERE/../..")"
 STATE_DIR="$HERE/.state"
 STATE="$STATE_DIR/state.env"
 
