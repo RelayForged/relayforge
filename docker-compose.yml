@@ -6,6 +6,10 @@
 # Production credentials are enforced by relay/infrastructure/persistence/
 # config.py, which refuses these defaults when RELAY_ENV is not 'dev'.
 #
+# The browser-facing services (API, dashboard, simulator, Demo 2 stores)
+# bind to RELAY_PUBLIC_BIND, 127.0.0.1 unless set. deploy/aws sets it to
+# 0.0.0.0 on the cloud instances; Kafka, Postgres and Redis never move.
+#
 # `version:` is intentionally omitted -- obsolete and ignored by Compose v2.
 
 services:
@@ -100,9 +104,10 @@ services:
     container_name: relay-simulator
     command: ["uvicorn", "simulator.main:app", "--host", "0.0.0.0", "--port", "8080"]
     ports:
-      - "127.0.0.1:${SIMULATOR_PORT:-8088}:8080"
+      - "${RELAY_PUBLIC_BIND:-127.0.0.1}:${SIMULATOR_PORT:-8088}:8080"
     environment:
       RELAY_ENV: dev
+      RELAY_CORS_ORIGINS: ${RELAY_CORS_ORIGINS:-}
       RELAY_WEBHOOK_SIGNING_SECRET: ${RELAY_WEBHOOK_SIGNING_SECRET:-relay-dev-signing-secret}
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/docs || exit 1"]
@@ -118,13 +123,14 @@ services:
     container_name: relay-api
     command: ["uvicorn", "relay.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
     ports:
-      - "127.0.0.1:8000:8000"
+      - "${RELAY_PUBLIC_BIND:-127.0.0.1}:8000:8000"
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-relay}:${POSTGRES_PASSWORD:-relaypassword}@postgres:5432/${POSTGRES_DB:-relaydb}
       ASYNC_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-relay}:${POSTGRES_PASSWORD:-relaypassword}@postgres:5432/${POSTGRES_DB:-relaydb}
       REDIS_URL: redis://:${REDIS_PASSWORD:-relaypassword}@redis:6379/0
       RELAY_ENV: dev
+      RELAY_CORS_ORIGINS: ${RELAY_CORS_ORIGINS:-}
       RELAY_ALLOW_PRIVATE_TARGETS: "true"
       AEDE_ENABLED: "true"
       ERI_ENABLED: "true"
@@ -196,13 +202,14 @@ services:
     container_name: relay-dashboard
     command: ["uvicorn", "relay.dashboard.main:app", "--host", "0.0.0.0", "--port", "8090"]
     ports:
-      - "127.0.0.1:8090:8090"
+      - "${RELAY_PUBLIC_BIND:-127.0.0.1}:8090:8090"
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-relay}:${POSTGRES_PASSWORD:-relaypassword}@postgres:5432/${POSTGRES_DB:-relaydb}
       ASYNC_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-relay}:${POSTGRES_PASSWORD:-relaypassword}@postgres:5432/${POSTGRES_DB:-relaydb}
       REDIS_URL: redis://:${REDIS_PASSWORD:-relaypassword}@redis:6379/0
       RELAY_ENV: dev
+      RELAY_CORS_ORIGINS: ${RELAY_CORS_ORIGINS:-}
     depends_on:
       kafka:
         condition: service_healthy
@@ -223,7 +230,7 @@ services:
     container_name: store-acme
     command: ["uvicorn", "examples.merchant_store.app:app", "--host", "0.0.0.0", "--port", "8070"]
     ports:
-      - "127.0.0.1:8071:8070"
+      - "${RELAY_PUBLIC_BIND:-127.0.0.1}:8071:8070"
     environment:
       MERCHANT_ID: acme
       MERCHANT_NAME: Acme Store
@@ -240,7 +247,7 @@ services:
     <<: *merchant-store
     container_name: store-bluebird
     ports:
-      - "127.0.0.1:8072:8070"
+      - "${RELAY_PUBLIC_BIND:-127.0.0.1}:8072:8070"
     environment:
       MERCHANT_ID: bluebird
       MERCHANT_NAME: Bluebird Books

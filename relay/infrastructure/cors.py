@@ -14,6 +14,10 @@ DEFAULT_CORS_ORIGINS = (
 
 
 def cors_origins() -> list[str]:
-    """Origins from RELAY_CORS_ORIGINS (comma-separated); the two UI origins by default."""
-    raw = os.environ.get("RELAY_CORS_ORIGINS", DEFAULT_CORS_ORIGINS)
+    """Origins from RELAY_CORS_ORIGINS (comma-separated); the two UI origins by default.
+
+    Empty counts as unset: compose passes `${RELAY_CORS_ORIGINS:-}` through,
+    and an empty allow-list would silently break the dashboard.
+    """
+    raw = os.environ.get("RELAY_CORS_ORIGINS") or DEFAULT_CORS_ORIGINS
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
