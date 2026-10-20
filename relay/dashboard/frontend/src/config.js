@@ -43,6 +43,21 @@ const KNOWN_ENDPOINTS = {
   "store-bluebird": "Bluebird Books (Demo 2)",
 };
 
+// Deployed (deploy/aws), the merchant stores share one host and are told
+// apart by their published port.
+const KNOWN_STORE_PORTS = {
+  8071: "Acme Store (Demo 2)",
+  8072: "Bluebird Books (Demo 2)",
+};
+
+function endpointPort(targetUrl) {
+  try {
+    return new URL(targetUrl).port;
+  } catch {
+    return "";
+  }
+}
+
 export function endpointHost(targetUrl) {
   if (!targetUrl) {
     return null;
@@ -61,6 +76,10 @@ export function endpointLabel(endpoint) {
   const host = endpointHost(endpoint.target_url);
   if (host && KNOWN_ENDPOINTS[host]) {
     return KNOWN_ENDPOINTS[host];
+  }
+  const storeName = endpoint.owner_id === "payflow" && KNOWN_STORE_PORTS[endpointPort(endpoint.target_url)];
+  if (storeName) {
+    return storeName;
   }
   const shortId = String(endpoint.endpoint_id ?? "").slice(0, 8);
   return host ? `${host} · ${shortId}` : shortId;
