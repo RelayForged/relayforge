@@ -3,6 +3,7 @@ Pre-demo smoke check: drives the running compose stack the way the
 dashboard does, and exits non-zero if any step fails.
 
     python demo/smoke_check.py
+    RELAY_HOST=13.200.1.2 python demo/smoke_check.py   # a deployed stack
 
 Checks every route the UI calls (with the browser's CORS origin), then runs
 Normal -> Full Outage -> restore -> Recovery over the live WebSocket and
@@ -13,17 +14,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import time
 
 import httpx
 import websockets
 
-UI_ORIGIN = "http://localhost:8090"
-API = "http://127.0.0.1:8000"
-DASHBOARD = "http://127.0.0.1:8090"
-SIMULATOR = "http://127.0.0.1:8088"
-WS = "ws://127.0.0.1:8090/ws"
+# The stack's host: local compose by default, or a deployment (deploy/aws).
+HOST = os.environ.get("RELAY_HOST", "127.0.0.1")
+UI_ORIGIN = "http://localhost:8090" if HOST == "127.0.0.1" else f"http://{HOST}:8090"
+API = f"http://{HOST}:8000"
+DASHBOARD = f"http://{HOST}:8090"
+SIMULATOR = f"http://{HOST}:8088"
+WS = f"ws://{HOST}:8090/ws"
 
 failures: list[str] = []
 
