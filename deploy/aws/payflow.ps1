@@ -16,11 +16,17 @@ if (-not (Test-Path $python)) { $python = "python" }
 
 $env:RELAY_URL = "http://$($state.RELAY_IP):8000"
 $env:PAYFLOW_STATE = Join-Path $PSScriptRoot ".state\merchants.json"
+# Amounts are printed with the rupee sign: have Python write UTF-8 and the
+# console read it, then put the console back as it was.
+$env:PYTHONIOENCODING = "utf-8"
+$consoleEncoding = [Console]::OutputEncoding
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Push-Location $repo
 try {
     & $python -m examples.payflow @args
 }
 finally {
     Pop-Location
-    Remove-Item Env:RELAY_URL, Env:PAYFLOW_STATE
+    [Console]::OutputEncoding = $consoleEncoding
+    Remove-Item Env:RELAY_URL, Env:PAYFLOW_STATE, Env:PYTHONIOENCODING
 }

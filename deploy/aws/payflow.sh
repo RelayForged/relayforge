@@ -11,5 +11,7 @@ PY="$REPO/.venv/Scripts/python.exe"
 [ -x "$PY" ] || PY=python3
 
 cd "$REPO"
-RELAY_URL="http://$RELAY_IP:8000" PAYFLOW_STATE="$(native_path "$STATE_DIR/merchants.json")" \
+# UTF-8 output: amounts are printed with the rupee sign, which the Windows
+# console's default code page cannot encode.
+RELAY_URL="http://$RELAY_IP:8000" PYTHONIOENCODING=utf-8 PAYFLOW_STATE="$(native_path "$STATE_DIR/merchants.json")" \
   exec "$PY" -m examples.payflow "$@"
