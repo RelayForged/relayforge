@@ -97,7 +97,9 @@ wait_for_ssh() {
 # Wait until a URL answers 2xx: wait_for_url URL LABEL
 wait_for_url() {
   local url=$1 label=$2 tries=0
-  until curl -sf -o /dev/null --max-time 5 "$url"; do
+  # Redirect rather than `-o /dev/null`: Git Bash's curl is a Windows
+  # program, and with path conversion off it cannot open /dev/null.
+  until curl -sf --max-time 5 "$url" > /dev/null; do
     tries=$((tries + 1))
     [ "$tries" -lt 90 ] || die "$label did not come up at $url"
     sleep 5
